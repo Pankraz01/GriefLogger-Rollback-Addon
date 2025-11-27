@@ -4,6 +4,7 @@ import org.slf4j.Logger;
 
 import com.mojang.logging.LogUtils;
 
+import eu.pankraz01.glra.Config;
 import eu.pankraz01.glra.database.DBConnection;
  
 import net.neoforged.bus.api.IEventBus;
@@ -110,10 +111,10 @@ public class GriefloggerRollbackAddon {
 
     private boolean verifyDatabaseConnection() {
         try (var conn = DBConnection.getConnection()) {
-            LOGGER.info(MOD_PREFIX + "Database connection succeeded");
+            LOGGER.info("{}Database connection succeeded (type={})", MOD_PREFIX, Config.databaseType());
             return true;
         } catch (Exception e) {
-            LOGGER.error(MOD_PREFIX + "Database connection failed", e);
+            LOGGER.error("{}Database connection failed for type {}", MOD_PREFIX, Config.databaseType(), e);
             return false;
         }
     }

@@ -2,7 +2,7 @@
 Grieflogger Rollback Addon
 ==========================
 
-This NeoForge addon reads GriefLogger data from MariaDB and reverts block actions in-game via command. It targets NeoForge 21.1.213 / Minecraft 1.21.1 and is server-side only: any logged block placements or breaks can be undone selectively.
+This NeoForge addon reads [GriefLogger](https://github.com/DAQEM/GriefLogger) data from SQLite (default) or MySQL/MariaDB and reverts block actions in-game via command. It targets NeoForge 21.1.213 / Minecraft 1.21.1 and is server-side only: any logged block placements or breaks can be undone selectively.
 
 Features
 --------
@@ -15,24 +15,26 @@ Features
 Requirements
 ------------
 - NeoForge 21.1.213 / Minecraft 1.21.1.
-- A running MariaDB instance with the GriefLogger schema (tables `blocks`, `materials`, `users`, `levels`).
-- MariaDB JDBC driver available at runtime (e.g., place `mariadb-java-client-3.x.jar` in `mods/` or otherwise on the classpath).
-- Database credentials with read access.
+- A GriefLogger database in SQLite file form or a running MySQL/MariaDB instance with the GriefLogger schema (tables `blocks`, `materials`, `users`, `levels`).
+- JDBC driver for the chosen backend available at runtime (e.g., `sqlite-jdbc-3.x.jar`, `mysql-connector-j-8.x.jar`, or `mariadb-java-client-3.x.jar` placed in `mods/` or otherwise on the classpath).
+- Database credentials with read access (for MySQL/MariaDB).
 
 Installation
 ------------
-1. Place the mod JAR and the MariaDB JDBC driver JAR into the server `mods/` folder.
+1. Place the mod JAR and the JDBC driver for your backend (SQLite, MySQL, or MariaDB) into the server `mods/` folder.
 2. Start the server once to generate `config/grieflogger/griefloggerrollbackaddon-common.toml`.
-3. Fill in the DB credentials in the config and restart the server.
+3. Choose the backend via `dbType` (case-insensitive, default `SQLITE`). For SQLite set `dbFile`; for MySQL/MariaDB set host/port/name/user/password.
 4. Check the log for `[griefloggerrollbackaddon] Database connection succeeded`. If it fails, the addon remains disabled until the connection works.
 
 Configuration (`config/grieflogger/griefloggerrollbackaddon-common.toml`)
 ------------------------------------------------------------------------
-- `dbHost` (String, default `localhost`): MariaDB host.
-- `dbPort` (Int, default `3306`): MariaDB port.
-- `dbName` (String, default `grieflogger`): Database name.
-- `dbUser` (String): Database user.
-- `dbPassword` (String): Database password.
+- `dbType` (Enum, default `SQLITE`): Choose `SQLITE`, `MYSQL`, or `MARIADB` (case-insensitive).
+- `dbFile` (String, default `config/grieflogger/grieflogger.sqlite`): SQLite database file path when `dbType=SQLITE`.
+- `dbHost` (String, default `localhost`): MySQL/MariaDB host.
+- `dbPort` (Int, default `3306`): MySQL/MariaDB port.
+- `dbName` (String, default `grieflogger`): Database name for MySQL/MariaDB.
+- `dbUser` (String): Database user for MySQL/MariaDB.
+- `dbPassword` (String): Database password for MySQL/MariaDB.
 - `rollbackBatchSize` (Int, default `200`): Number of actions processed per tick.
 - `progressTickInterval` (Int, default `20`): How many ticks between progress log messages.
 
@@ -45,10 +47,10 @@ Syntax: `/gl rollback t:<time> [u:<player>] [r:<radius|c<chunks>>]`
 - `r:` Optional radius. Default uses blocks (`r:25`). Prefix `c` switches to chunks (`r:c4` = radius of 4 chunks). Prefix `b` forces blocks (`r:b40`).
 
 Examples
-- `/gl rollback t:2h` — Roll back all actions from the last 2 hours.
-- `/gl rollback t:1d u:Griefer123` — Only that player’s actions in the last 24h.
-- `/gl rollback t:30m r:c2` — Within 2 chunks around the executor.
-- `/gl rollback t:10m u:User r:20` — Player filter plus 20-block radius.
+- `/gl rollback t:2h` - Roll back all actions from the last 2 hours.
+- `/gl rollback t:1d u:Griefer123` - Only that player's actions in the last 24h.
+- `/gl rollback t:30m r:c2` - Within 2 chunks around the executor.
+- `/gl rollback t:10m u:User r:20` - Player filter plus 20-block radius.
 
 How it works
 ------------
@@ -75,4 +77,5 @@ Notes and limitations
 Development/Building
 --------------------
 - Java 21, Gradle wrapper included. Build locally with `./gradlew build` (or `gradlew.bat build` on Windows).
-- MariaDB driver is declared as `localRuntime`; provide the driver JAR separately for production.
+- MariaDB, MySQL, and SQLite drivers are declared as `localRuntime`; provide the driver JAR separately for production.
+
