@@ -1,0 +1,13 @@
+{
+  "itemGroup.griefloggerrollbackaddon": "Example Mod Tab",
+  "block.griefloggerrollbackaddon.example_block": "Example Block",
+  "item.griefloggerrollbackaddon.example_item": "Example Item",
+
+  "griefloggerrollbackaddon.configuration.title": "Grieflogger-Rollback-Addon Configs",
+  "griefloggerrollbackaddon.configuration.section.griefloggerrollbackaddon.common.toml": "Grieflogger-Rollback-Addon Configs",
+  "griefloggerrollbackaddon.configuration.section.griefloggerrollbackaddon.common.toml.title": "Grieflogger-Rollback-Addon Configs",
+  "griefloggerrollbackaddon.configuration.items": "Item List",
+  "griefloggerrollbackaddon.configuration.logDirtBlock": "Log Dirt Block",
+  "griefloggerrollbackaddon.configuration.magicNumberIntroduction": "Magic Number Text",
+  "griefloggerrollbackaddon.configuration.magicNumber": "Magic Number"
+}
