@@ -14,6 +14,7 @@ public final class Permissions {
     private static final int DEFAULT_OP_LEVEL = 3;
 
     public static final PermissionNode<Boolean> COMMAND_ROLLBACK = booleanNode("command.rollback", DEFAULT_OP_LEVEL);
+    public static final PermissionNode<Boolean> COMMAND_ROLLBACK_UNDO = booleanNode("command.rollback.undo", DEFAULT_OP_LEVEL);
     public static final PermissionNode<Boolean> COMMAND_WEB_TOKEN = booleanNode("command.web.token", DEFAULT_OP_LEVEL);
     public static final PermissionNode<Boolean> COMMAND_WEB_SERVER = booleanNode("command.web.server", DEFAULT_OP_LEVEL);
     public static final PermissionNode<Boolean> COMMAND_CONFIG_RELOAD = booleanNode("command.config.reload", DEFAULT_OP_LEVEL);
@@ -31,6 +32,7 @@ public final class Permissions {
     public static void registerNodes(PermissionGatherEvent.Nodes event) {
         event.addNodes(
                 COMMAND_ROLLBACK,
+                COMMAND_ROLLBACK_UNDO,
                 COMMAND_WEB_TOKEN,
                 COMMAND_WEB_SERVER,
                 COMMAND_CONFIG_RELOAD,

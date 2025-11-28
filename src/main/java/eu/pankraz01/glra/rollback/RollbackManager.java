@@ -7,6 +7,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
 import java.util.Queue;
+import java.util.Base64;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -26,6 +27,7 @@ import eu.pankraz01.glra.database.Action;
 import eu.pankraz01.glra.database.ContainerAction;
 import eu.pankraz01.glra.database.dao.ActionDAO;
 import eu.pankraz01.glra.database.dao.RollbackActionLogDAO;
+import eu.pankraz01.glra.database.dao.RollbackActionLogDAO.LoggedRollbackAction;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.core.RegistryAccess;
@@ -167,6 +169,50 @@ public class RollbackManager {
         });
     }
 
+    /**
+     * Undo one or more recent rollbacks by replaying the logged actions in reverse order.
+     */
+    public void startUndo(List<LoggedRollbackAction> actions, String label) {
+        if (actions == null || actions.isEmpty()) {
+            LOGGER.warn("Undo requested but no logged rollback actions were found");
+            return;
+        }
+        if (runningJob.get()) {
+            LOGGER.warn("A rollback job is already running");
+            return;
+        }
+
+        runningJob.set(true);
+        cancelFlag.set(false);
+        processedTotal.set(0);
+        expectedTotal.set(0);
+        errorTotal.set(0);
+        loading.set(true);
+        completionMessagePending.set(false);
+        lastCompletion = CompletionReason.NONE;
+        jobStartMillis = System.currentTimeMillis();
+        jobInfo = new RollbackJobInfo(label == null ? "undo" : label, Optional.empty(), Optional.empty(), RollbackKind.BOTH);
+        jobHistoryId = -1L;
+        ticksSinceProgressLog = 0;
+
+        loader.submit(() -> {
+            try {
+                LOGGER.info("Loading {} logged actions for undo (label={})", actions.size(), label);
+                for (LoggedRollbackAction action : actions) {
+                    queue.offer(new LoggedQueuedAction(action));
+                }
+                expectedTotal.set(actions.size());
+                loading.set(false);
+            } catch (Exception e) {
+                LOGGER.error("Failed to enqueue undo actions", e);
+                loading.set(false);
+                runningJob.set(false);
+                lastCompletion = CompletionReason.FAILED;
+                completionMessagePending.set(true);
+            }
+        });
+    }
+
     public boolean hasRunningJob() {
         return runningJob.get() || loading.get();
     }
@@ -250,6 +296,8 @@ public class RollbackManager {
                 } else if (queued instanceof ContainerQueuedAction container) {
                     applyContainerInverse(server, container.action());
                     logContainerAction(container.action());
+                } else if (queued instanceof LoggedQueuedAction logged) {
+                    applyUndoFromLog(server, logged.action());
                 }
             } catch (Exception e) {
                 errorTotal.incrementAndGet();
@@ -441,6 +489,109 @@ public class RollbackManager {
         }
     }
 
+    private void applyUndoFromLog(MinecraftServer server, LoggedRollbackAction action) {
+        if (action == null) return;
+        if ("block".equalsIgnoreCase(action.type())) {
+            applyUndoBlock(server, action);
+        } else if ("container".equalsIgnoreCase(action.type())) {
+            applyUndoContainer(server, action);
+        } else {
+            LOGGER.warn("Undo: unknown logged action type '{}'", action.type());
+        }
+    }
+
+    private void applyUndoBlock(MinecraftServer server, LoggedRollbackAction action) {
+        ResourceKey<Level> levelKey = levelKeyFrom(0, action.levelName());
+        ServerLevel level = levelKey == null ? server.overworld() : server.getLevel(levelKey);
+        if (level == null) {
+            LOGGER.warn("Undo: no level found for name={}, skipping block action at {},{},{}", action.levelName(), action.x(), action.y(), action.z());
+            return;
+        }
+
+        BlockPos pos = new BlockPos(action.x(), action.y(), action.z());
+        if (!ensureChunkLoaded(level, pos)) {
+            LOGGER.warn("Undo: target chunk not loaded for {}, skipping block action", pos);
+            return;
+        }
+
+        Block target = switch (action.actionType()) {
+            case 1 -> Blocks.AIR; // original action was a break -> undo by breaking again
+            case 2 -> blockFromName(action.material()); // original action was a placement -> set placed block
+            default -> blockFromName(action.material());
+        };
+
+        boolean ok = level.setBlock(pos, Objects.requireNonNull(target.defaultBlockState()), Block.UPDATE_ALL);
+        if (!ok) {
+            LOGGER.warn("Undo: setBlock returned false at {} in {}", pos, levelKey == null ? "overworld" : levelKey.location());
+        }
+    }
+
+    private void applyUndoContainer(MinecraftServer server, LoggedRollbackAction action) {
+        ResourceKey<Level> levelKey = levelKeyFrom(0, action.levelName());
+        ServerLevel level = levelKey == null ? server.overworld() : server.getLevel(levelKey);
+        if (level == null) {
+            LOGGER.warn("Undo: no level found for name={}, skipping container action at {},{},{}", action.levelName(), action.x(), action.y(), action.z());
+            return;
+        }
+
+        BlockPos pos = new BlockPos(action.x(), action.y(), action.z());
+        if (!ensureChunkLoaded(level, pos)) {
+            LOGGER.warn("Undo: target chunk not loaded for {}, skipping container action", pos);
+            return;
+        }
+
+        Container container = resolveContainer(level, pos);
+        if (container == null) {
+            LOGGER.warn("Undo: no container found at {} in {}", pos, levelKey == null ? "overworld" : levelKey.location());
+            return;
+        }
+
+        byte[] data = decodeBase64(action.itemData());
+        ItemStack template = itemFromNameAndData(action.material(), data);
+        if (template.isEmpty()) {
+            LOGGER.warn("Undo: unknown item '{}' at {},{},{}", action.material(), action.x(), action.y(), action.z());
+            return;
+        }
+
+        int remaining;
+        boolean dropLeftover = false;
+        switch (action.actionType()) {
+            case 4 -> { // original add -> rollback removed items -> undo should add back
+                remaining = addItems(container, template, action.amount());
+                dropLeftover = true;
+            }
+            case 5 -> { // original remove -> rollback added items -> undo should remove again
+                remaining = removeItems(container, template, action.amount());
+                if (remaining > 0) {
+                    LOGGER.warn("Undo: could not remove {}x {} from container at {}", remaining, action.material(), pos);
+                }
+            }
+            default -> {
+                LOGGER.warn("Undo: unknown container action code {} at {}", action.actionType(), pos);
+                return;
+            }
+        }
+
+        if (container instanceof BlockEntity be) {
+            be.setChanged();
+        } else {
+            container.setChanged();
+        }
+
+        if (dropLeftover && remaining > 0) {
+            int still = remaining;
+            while (still > 0) {
+                ItemStack drop = template.copy();
+                drop.setCount(Math.min(still, drop.getMaxStackSize()));
+                ItemEntity entity = new ItemEntity(level, pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5, drop);
+                entity.setDefaultPickUpDelay();
+                level.addFreshEntity(entity);
+                still -= drop.getCount();
+            }
+            LOGGER.info("Undo: container at {} was full, dropped {}x {}", pos, remaining, action.material());
+        }
+    }
+
     private void applyContainerInverse(MinecraftServer server, ContainerAction action) {
         ResourceKey<Level> levelKey = levelKeyFrom(action.levelId, action.levelName);
         ServerLevel level = levelKey == null ? server.overworld() : server.getLevel(levelKey);
@@ -544,6 +695,16 @@ public class RollbackManager {
         }
 
         return null;
+    }
+
+    private byte[] decodeBase64(String data) {
+        if (data == null || data.isBlank()) return new byte[0];
+        try {
+            return Base64.getDecoder().decode(data);
+        } catch (IllegalArgumentException e) {
+            LOGGER.warn("Undo: could not decode item data (base64) length={}", data.length());
+            return new byte[0];
+        }
     }
 
     @SuppressWarnings("null")
@@ -775,7 +936,7 @@ public class RollbackManager {
         }
     }
 
-    private sealed interface QueuedAction permits BlockQueuedAction, ContainerQueuedAction {
+    private sealed interface QueuedAction permits BlockQueuedAction, ContainerQueuedAction, LoggedQueuedAction {
         Instant timestamp();
     }
 
@@ -790,6 +951,13 @@ public class RollbackManager {
         @Override
         public Instant timestamp() {
             return action.timestamp;
+        }
+    }
+
+    private record LoggedQueuedAction(LoggedRollbackAction action) implements QueuedAction {
+        @Override
+        public Instant timestamp() {
+            return Instant.ofEpochMilli(action.ts());
         }
     }
 

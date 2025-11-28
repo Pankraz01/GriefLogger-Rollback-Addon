@@ -16,6 +16,7 @@ import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.tick.ServerTickEvent;
 import eu.pankraz01.glra.rollback.RollbackManager;
 import eu.pankraz01.glra.commands.RollbackCommand;
+import eu.pankraz01.glra.commands.RollbackUndoCommand;
 import eu.pankraz01.glra.commands.web.WebCommandToken;
 import eu.pankraz01.glra.commands.web.WebCommandWebserver;
 import eu.pankraz01.glra.commands.ConfigCommand;
@@ -210,6 +211,8 @@ public class GriefloggerRollbackAddon {
             
             RollbackCommand.register(dispatcher);
             registered.add("/gl rollback");
+            RollbackUndoCommand.register(dispatcher);
+            registered.add("/gl rollback undo");
 
             eu.pankraz01.glra.commands.web.WebCommandToken.register(dispatcher);
             eu.pankraz01.glra.commands.web.WebCommandWebserver.register(dispatcher);

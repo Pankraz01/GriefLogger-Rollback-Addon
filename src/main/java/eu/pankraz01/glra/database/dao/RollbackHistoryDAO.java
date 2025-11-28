@@ -2,7 +2,10 @@ package eu.pankraz01.glra.database.dao;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
+import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 
 import eu.pankraz01.glra.database.DBConnection;
@@ -35,6 +38,21 @@ public final class RollbackHistoryDAO {
             attempts++;
         }
         throw new RuntimeException("Failed to record rollback history after retries");
+    }
+
+    public List<Long> loadRecentHistoryIds(int limit) throws SQLException {
+        List<Long> ids = new ArrayList<>();
+        if (limit <= 0) return ids;
+        String sql = "SELECT id FROM glra_rollback_history ORDER BY ts DESC LIMIT ?";
+        try (Connection conn = DBConnection.getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setInt(1, limit);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    ids.add(rs.getLong("id"));
+                }
+            }
+        }
+        return ids;
     }
 
     private boolean isPrimaryKeyViolation(SQLException e) {
