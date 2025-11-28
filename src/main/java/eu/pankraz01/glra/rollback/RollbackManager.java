@@ -32,10 +32,15 @@ import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.NbtIo;
+import net.minecraft.network.chat.Style;
+import net.minecraft.network.chat.MutableComponent;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.TextColor;
 import net.minecraft.world.Container;
 import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.item.Item;
@@ -47,12 +52,37 @@ import net.minecraft.world.level.block.ChestBlock;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.chunk.status.ChunkStatus;
 
+import eu.pankraz01.glra.gui.ActionBarNotifier;
+
 /**
  * Rollback manager adapted to the griefLogger DB schema. Loads block + container entries and enqueues them.
  */
 public class RollbackManager {
     private static final Logger LOGGER = LogUtils.getLogger();
+    @SuppressWarnings("null")
     private static final HolderLookup.Provider BUILTIN_PROVIDER = RegistryAccess.fromRegistryOfRegistries(BuiltInRegistries.REGISTRY);
+    private static final String LANG_ACTIONBAR_BASE = "message.griefloggerrollbackaddon.actionbar.";
+    private static final String LANG_SCOPE_BASE = "message.griefloggerrollbackaddon.rollback.scope.";
+    private static final String ACTIONBAR_DONE_KEY = LANG_ACTIONBAR_BASE + "done";
+    private static final String ACTIONBAR_FAILED_KEY = LANG_ACTIONBAR_BASE + "failed";
+    private static final String ACTIONBAR_CANCELLED_KEY = LANG_ACTIONBAR_BASE + "cancelled";
+    private static final String ACTIONBAR_PREFIX_KEY = LANG_ACTIONBAR_BASE + "prefix";
+    private static final String ACTIONBAR_PROGRESS_KEY = LANG_ACTIONBAR_BASE + "progress";
+    private static final String ACTIONBAR_PROGRESS_SIMPLE_KEY = LANG_ACTIONBAR_BASE + "progress_simple";
+    private static final String ACTIONBAR_REMAINING_KEY = LANG_ACTIONBAR_BASE + "remaining";
+    private static final String ACTIONBAR_ELAPSED_KEY = LANG_ACTIONBAR_BASE + "elapsed";
+    private static final String ACTIONBAR_ETA_KEY = LANG_ACTIONBAR_BASE + "eta";
+    private static final String ACTIONBAR_TIME_KEY = LANG_ACTIONBAR_BASE + "time";
+    private static final String ACTIONBAR_PLAYER_KEY = LANG_ACTIONBAR_BASE + "player";
+    private static final String ACTIONBAR_RADIUS_KEY = LANG_ACTIONBAR_BASE + "radius";
+    private static final String ACTIONBAR_SCOPE_KEY = LANG_ACTIONBAR_BASE + "scope";
+    private static final String ACTIONBAR_ERRORS_KEY = LANG_ACTIONBAR_BASE + "errors";
+    private static final String ACTIONBAR_STATUS_RUNNING_KEY = LANG_ACTIONBAR_BASE + "status.running";
+    private static final String ACTIONBAR_STATUS_LOADING_KEY = LANG_ACTIONBAR_BASE + "status.loading";
+    private static final String ACTIONBAR_STATUS_CANCELLING_KEY = LANG_ACTIONBAR_BASE + "status.cancelling";
+    private static final String ACTIONBAR_STATUS_FINISHED_KEY = LANG_ACTIONBAR_BASE + "status.done";
+    private static final String ACTIONBAR_STATUS_FAILED_KEY = LANG_ACTIONBAR_BASE + "status.failed";
+    private static final String ACTIONBAR_STATUS_CANCELLED_KEY = LANG_ACTIONBAR_BASE + "status.cancelled";
 
     private final ExecutorService loader = Executors.newSingleThreadExecutor(r -> {
         Thread t = new Thread(r, "glra-action-loader");
@@ -64,7 +94,15 @@ public class RollbackManager {
     private final AtomicBoolean runningJob = new AtomicBoolean(false);
     private final AtomicBoolean cancelFlag = new AtomicBoolean(false);
     private final AtomicLong processedTotal = new AtomicLong();
+    private final AtomicLong expectedTotal = new AtomicLong();
+    private final AtomicLong errorTotal = new AtomicLong();
+    private final AtomicBoolean loading = new AtomicBoolean(false);
+    private final AtomicBoolean completionMessagePending = new AtomicBoolean(false);
+    private volatile CompletionReason lastCompletion = CompletionReason.NONE;
+    private volatile RollbackJobInfo jobInfo;
+    private long jobStartMillis = 0L;
     private int ticksSinceProgressLog = 0;
+    private final ActionBarNotifier actionBarNotifier = new ActionBarNotifier();
 
     private final ActionDAO dao = new ActionDAO();
 
@@ -72,7 +110,7 @@ public class RollbackManager {
      * Start a rollback by loading block and inventory actions since `sinceMillis` (inclusive).
      * Player is an optional username filter.
      */
-    public void startRollback(long sinceMillis, Optional<String> player, Optional<RollbackArea> area, RollbackKind kind) {
+    public void startRollback(long sinceMillis, String timeLabel, Optional<String> player, Optional<RollbackArea> area, Optional<String> radiusLabel, RollbackKind kind) {
         if (runningJob.get()) {
             LOGGER.warn("A rollback job is already running");
             return;
@@ -83,6 +121,14 @@ public class RollbackManager {
         runningJob.set(true);
         cancelFlag.set(false);
         processedTotal.set(0);
+        expectedTotal.set(0);
+        errorTotal.set(0);
+        loading.set(true);
+        completionMessagePending.set(false);
+        lastCompletion = CompletionReason.NONE;
+        jobStartMillis = System.currentTimeMillis();
+        Optional<String> safeRadiusLabel = radiusLabel == null ? Optional.empty() : radiusLabel;
+        jobInfo = new RollbackJobInfo(timeLabel == null ? "provided time" : timeLabel, player, safeRadiusLabel, effectiveKind);
         ticksSinceProgressLog = 0;
 
         loader.submit(() -> {
@@ -104,16 +150,25 @@ public class RollbackManager {
                 combined.sort(Comparator.comparing(QueuedAction::timestamp).reversed()); // newest first to undo latest changes first
                 combined.forEach(queue::offer);
 
+                expectedTotal.set(combined.size());
+                loading.set(false);
                 LOGGER.info("Loaded {} block actions and {} container actions, enqueued {}", blockActions.size(), containerActions.size(), combined.size());
             } catch (SQLException e) {
                 LOGGER.error("Failed to load actions for rollback", e);
+                loading.set(false);
                 runningJob.set(false);
+                lastCompletion = CompletionReason.FAILED;
+                completionMessagePending.set(true);
             }
         });
     }
 
     public void cancelCurrent() {
         cancelFlag.set(true);
+    }
+
+    public void trackActionBar(ServerPlayer player) {
+        actionBarNotifier.track(player);
     }
 
     public boolean isCancelled() {
@@ -129,7 +184,16 @@ public class RollbackManager {
      */
     public void tick(MinecraftServer server) {
         if (server == null) return;
-        if (!runningJob.get() && queue.isEmpty()) return;
+        boolean pendingCompletion = completionMessagePending.get();
+        if (!runningJob.get() && queue.isEmpty()) {
+            if (pendingCompletion) {
+                sendActionBarUpdate(server);
+                completionMessagePending.set(false);
+                actionBarNotifier.clear();
+                jobInfo = null;
+            }
+            return;
+        }
 
         int batchSize = Math.max(1, Config.ROLLBACK_BATCH_SIZE.get());
         int processed = processBatch(server, batchSize);
@@ -140,6 +204,14 @@ public class RollbackManager {
         if (ticksSinceProgressLog >= progressInterval) {
             ticksSinceProgressLog = 0;
             LOGGER.info("Rollback progress: remaining={}, processedTotal={}, runningJob={}", queue.size(), processedTotal.get(), runningJob.get());
+            sendActionBarUpdate(server);
+        }
+
+        if (completionMessagePending.get()) {
+            sendActionBarUpdate(server);
+            completionMessagePending.set(false);
+            actionBarNotifier.clear();
+            jobInfo = null;
         }
     }
 
@@ -153,6 +225,9 @@ public class RollbackManager {
                 LOGGER.info("Rollback cancelled, clearing remaining {} actions", queue.size());
                 queue.clear();
                 runningJob.set(false);
+                lastCompletion = CompletionReason.CANCELLED;
+                loading.set(false);
+                completionMessagePending.set(true);
                 return processed;
             }
 
@@ -166,17 +241,166 @@ public class RollbackManager {
                     applyContainerInverse(server, container.action());
                 }
             } catch (Exception e) {
+                errorTotal.incrementAndGet();
                 LOGGER.error("Failed to apply action {}", queued, e);
             }
 
             processed++;
         }
 
-        if (queue.isEmpty() && runningJob.get()) {
+        if (queue.isEmpty() && runningJob.get() && !loading.get()) {
             LOGGER.info("Rollback job finished (queue empty)");
             runningJob.set(false);
+            loading.set(false);
+            lastCompletion = CompletionReason.FINISHED;
+            completionMessagePending.set(true);
         }
         return processed;
+    }
+
+    private void sendActionBarUpdate(MinecraftServer server) {
+        if (server == null || jobInfo == null || !actionBarNotifier.hasWatchers()) return;
+
+        Component text = buildActionBarComponent();
+        if (text == null) return;
+
+        actionBarNotifier.send(server, text);
+    }
+
+    @SuppressWarnings("null")
+    private Component buildActionBarComponent() {
+        RollbackJobInfo info = jobInfo;
+        if (info == null) return null;
+
+        long expected = expectedTotal.get();
+        long processed = processedTotal.get();
+        int queued = queue.size();
+        long remaining = expected > 0 ? Math.max(0, expected - processed) : queued;
+        long elapsedMs = jobStartMillis == 0 ? 0L : Math.max(0L, System.currentTimeMillis() - jobStartMillis);
+        boolean running = runningJob.get();
+        boolean cancelling = cancelFlag.get();
+        boolean isLoading = loading.get();
+        CompletionReason completion = lastCompletion;
+        long etaMs = estimateEtaMs(processed, remaining, elapsedMs);
+
+        if (completion == CompletionReason.FINISHED && !running) {
+            return coloredCompletion(ACTIONBAR_DONE_KEY, 0x55FF55);
+        }
+        if (completion == CompletionReason.FAILED && !running) {
+            return coloredCompletion(ACTIONBAR_FAILED_KEY, 0xFF5555);
+        }
+        if (completion == CompletionReason.CANCELLED && !running) {
+            return coloredCompletion(ACTIONBAR_CANCELLED_KEY, 0xAAAAAA);
+        }
+
+        MutableComponent text = Component.translatable(ACTIONBAR_PREFIX_KEY, statusLabel(running, cancelling, isLoading, completion));
+
+        if (expected > 0) {
+            text = text.append(space()).append(Component.translatable(ACTIONBAR_PROGRESS_KEY,
+                    Component.literal(formatPercent(processed, expected)),
+                    Component.literal(formatCount(processed)),
+                    Component.literal(formatCount(expected))));
+        } else {
+            text = text.append(space()).append(Component.translatable(ACTIONBAR_PROGRESS_SIMPLE_KEY,
+                    Component.literal(formatCount(processed))));
+        }
+
+        text = text.append(space()).append(Component.translatable(ACTIONBAR_REMAINING_KEY, Component.literal(formatCount(remaining))));
+        if (elapsedMs > 0) {
+            text = text.append(space()).append(Component.translatable(ACTIONBAR_ELAPSED_KEY, Component.literal(formatDuration(elapsedMs))));
+            if (etaMs >= 0 && completion == CompletionReason.NONE && !isLoading) {
+                text = text.append(space()).append(Component.translatable(ACTIONBAR_ETA_KEY, Component.literal(formatDuration(etaMs))));
+            }
+        }
+
+        text = text.append(space()).append(Component.translatable(ACTIONBAR_TIME_KEY, info.timeLabel()));
+
+        String playerName = info.player().orElse(null);
+        if (playerName != null) {
+            text = text.append(space()).append(Component.translatable(ACTIONBAR_PLAYER_KEY, playerName));
+        }
+
+        String radius = info.radiusLabel().orElse(null);
+        if (radius != null) {
+            text = text.append(space()).append(Component.translatable(ACTIONBAR_RADIUS_KEY, radius));
+        }
+
+        text = text.append(space()).append(Component.translatable(ACTIONBAR_SCOPE_KEY, describeKindComponent(info.kind())));
+
+        long errors = errorTotal.get();
+        if (errors > 0) {
+            text = text.append(space()).append(Component.translatable(ACTIONBAR_ERRORS_KEY, Component.literal(formatCount(errors))));
+        }
+        return text;
+    }
+
+    @SuppressWarnings("null")
+    private Component coloredCompletion(String key, int rgb) {
+        return Component.translatable(key).setStyle(Style.EMPTY.withColor(TextColor.fromRgb(rgb)));
+    }
+
+    private MutableComponent statusLabel(boolean running, boolean cancelling, boolean isLoading, CompletionReason completion) {
+        if (completion == CompletionReason.FINISHED && !running) return Component.translatable(ACTIONBAR_STATUS_FINISHED_KEY);
+        if (completion == CompletionReason.CANCELLED && !running) return Component.translatable(ACTIONBAR_STATUS_CANCELLED_KEY);
+        if (completion == CompletionReason.FAILED && !running) return Component.translatable(ACTIONBAR_STATUS_FAILED_KEY);
+        if (cancelling) return Component.translatable(ACTIONBAR_STATUS_CANCELLING_KEY);
+        if (isLoading) return Component.translatable(ACTIONBAR_STATUS_LOADING_KEY);
+        return Component.translatable(ACTIONBAR_STATUS_RUNNING_KEY);
+    }
+
+    private MutableComponent describeKindComponent(RollbackKind kind) {
+        return switch (kind) {
+            case BLOCKS_ONLY -> Component.translatable(LANG_SCOPE_BASE + "blocks_only");
+            case ITEMS_ONLY -> Component.translatable(LANG_SCOPE_BASE + "items_only");
+            default -> Component.translatable(LANG_SCOPE_BASE + "both");
+        };
+    }
+
+    private long estimateEtaMs(long processed, long remaining, long elapsedMs) {
+        if (processed <= 0 || elapsedMs <= 0) return -1;
+        double perActionMs = (double) elapsedMs / processed;
+        return Math.round(perActionMs * remaining);
+    }
+
+    private String formatPercent(long processed, long expected) {
+        if (expected <= 0) return "0%";
+        long pct = Math.round((double) processed * 100.0 / (double) expected);
+        if (pct > 100) pct = 100;
+        return pct + "%";
+    }
+
+    private String formatCount(long value) {
+        if (value >= 1_000_000) {
+            return formatShort(value / 1_000_000.0, "m");
+        }
+        if (value >= 1_000) {
+            return formatShort(value / 1_000.0, "k");
+        }
+        return Long.toString(value);
+    }
+
+    private String formatShort(double value, String suffix) {
+        String formatted = String.format("%.1f", value);
+        if (formatted.endsWith(".0")) {
+            formatted = formatted.substring(0, formatted.length() - 2);
+        }
+        return formatted + suffix;
+    }
+
+    private Component space() {
+        return Component.literal(" ");
+    }
+
+    private String formatDuration(long millis) {
+        if (millis < 0) return "--";
+        long seconds = millis / 1000;
+        long hours = seconds / 3600;
+        long minutes = (seconds % 3600) / 60;
+        long secs = seconds % 60;
+        if (hours > 0) {
+            return String.format("%d:%02d:%02d", hours, minutes, secs);
+        }
+        return String.format("%02d:%02d", minutes, secs);
     }
 
     private void applyBlockInverse(MinecraftServer server, Action action) {
@@ -272,14 +496,17 @@ public class RollbackManager {
     }
 
     private Container resolveContainer(ServerLevel level, BlockPos pos) {
+        @SuppressWarnings("null")
         var state = level.getBlockState(pos);
         var block = state.getBlock();
 
         if (block instanceof ChestBlock chest) {
+            @SuppressWarnings("null")
             Container merged = ChestBlock.getContainer(chest, state, level, pos, false);
             if (merged != null) return merged;
         }
 
+        @SuppressWarnings("null")
         BlockEntity be = level.getBlockEntity(pos);
         if (be instanceof Container container) {
             return container;
@@ -288,6 +515,7 @@ public class RollbackManager {
         return null;
     }
 
+    @SuppressWarnings("null")
     private int removeItems(Container container, ItemStack template, int amount) {
         int remaining = amount;
         for (int i = 0; i < container.getContainerSize() && remaining > 0; i++) {
@@ -329,6 +557,7 @@ public class RollbackManager {
         return remaining;
     }
 
+    @SuppressWarnings("null")
     private boolean isSameItem(ItemStack a, ItemStack b) {
         return ItemStack.isSameItemSameComponents(a, b);
     }
@@ -366,6 +595,7 @@ public class RollbackManager {
             CompoundTag tag = readItemTag(data);
             if (tag != null) {
                 try {
+                    @SuppressWarnings("null")
                     ItemStack stack = ItemStack.parseOptional(BUILTIN_PROVIDER, tag);
                     if (!stack.isEmpty()) {
                         return stack;
@@ -452,6 +682,15 @@ public class RollbackManager {
         long distSq = dx * dx + dz * dz; // horizontal distance only
         return distSq <= (long) area.radiusBlocks * (long) area.radiusBlocks;
     }
+
+    private enum CompletionReason {
+        NONE,
+        FINISHED,
+        CANCELLED,
+        FAILED
+    }
+
+    private record RollbackJobInfo(String timeLabel, Optional<String> player, Optional<String> radiusLabel, RollbackKind kind) {}
 
     public enum RollbackKind {
         BOTH,

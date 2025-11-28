@@ -4,7 +4,6 @@ import org.slf4j.Logger;
 
 import com.mojang.logging.LogUtils;
 
-import eu.pankraz01.glra.Config;
 import eu.pankraz01.glra.database.DBConnection;
  
 import net.neoforged.bus.api.IEventBus;

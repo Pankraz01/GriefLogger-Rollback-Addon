@@ -12,14 +12,40 @@ import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.MutableComponent;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.ChatFormatting;
 
 import eu.pankraz01.glra.GriefloggerRollbackAddon;
 import eu.pankraz01.glra.rollback.RollbackManager;
 
 public final class RollbackCommand {
-    private static final String USAGE = "Usage: /gl rollback u:<user> t:<time (s|m|h|d|M|y)> r:<radius|c<chunks>> [i|b]";
+    private static final String LANG_BASE = "message.griefloggerrollbackaddon.rollback.";
+    private static final String USAGE_KEY = LANG_BASE + "usage";
+    private static final String DISABLED_KEY = LANG_BASE + "disabled";
+    private static final String NOT_INITIALIZED_KEY = LANG_BASE + "not_initialized";
+    private static final String DUPLICATE_KIND_KEY = LANG_BASE + "parse.duplicate_kind";
+    private static final String INVALID_ARGUMENT_KEY = LANG_BASE + "parse.invalid_argument";
+    private static final String DUPLICATE_USER_KEY = LANG_BASE + "parse.duplicate_user";
+    private static final String DUPLICATE_TIME_KEY = LANG_BASE + "parse.duplicate_time";
+    private static final String INVALID_TIME_KEY = LANG_BASE + "parse.invalid_time";
+    private static final String DUPLICATE_RADIUS_KEY = LANG_BASE + "parse.duplicate_radius";
+    private static final String INVALID_RADIUS_KEY = LANG_BASE + "parse.invalid_radius";
+    private static final String UNKNOWN_ARGUMENT_KEY = LANG_BASE + "parse.unknown_argument";
+    private static final String MISSING_TIME_KEY = LANG_BASE + "parse.missing_time";
+    private static final String STARTED_KEY = LANG_BASE + "started";
+    private static final String WINDOW_LABEL_KEY = LANG_BASE + "window.label";
+    private static final String WINDOW_VALUE_KEY = LANG_BASE + "window.value";
+    private static final String PLAYER_LABEL_KEY = LANG_BASE + "player.label";
+    private static final String RADIUS_LABEL_KEY = LANG_BASE + "radius.label";
+    private static final String RADIUS_BLOCKS_VALUE_KEY = LANG_BASE + "radius.value.blocks";
+    private static final String RADIUS_CHUNKS_VALUE_KEY = LANG_BASE + "radius.value.chunks";
+    private static final String SCOPE_LABEL_KEY = LANG_BASE + "scope.label";
+    private static final String SCOPE_BLOCKS_KEY = LANG_BASE + "scope.blocks_only";
+    private static final String SCOPE_ITEMS_KEY = LANG_BASE + "scope.items_only";
+    private static final String SCOPE_BOTH_KEY = LANG_BASE + "scope.both";
 
+    @SuppressWarnings("null")
     public static void register(CommandDispatcher<CommandSourceStack> dispatcher) {
         dispatcher.register(Commands.literal("gl")
                 .then(Commands.literal("rollback")
@@ -28,20 +54,22 @@ public final class RollbackCommand {
                                 .executes(ctx -> execute(ctx, StringArgumentType.getString(ctx, "args"))))));
     }
 
+    @SuppressWarnings("null")
     private static int showUsage(CommandContext<CommandSourceStack> ctx) {
-        ctx.getSource().sendFailure(Component.literal(USAGE));
+        ctx.getSource().sendFailure(Component.translatable(USAGE_KEY));
         return 0;
     }
 
+    @SuppressWarnings("null")
     private static int execute(CommandContext<CommandSourceStack> ctx, String rawArgs) {
         if (!GriefloggerRollbackAddon.isEnabled()) {
-            ctx.getSource().sendFailure(Component.literal("Rollback addon is disabled because no database connection was available during startup"));
+            ctx.getSource().sendFailure(Component.translatable(DISABLED_KEY));
             return 0;
         }
 
         ParseResult result = parseArgs(rawArgs);
         if (!result.success()) {
-            ctx.getSource().sendFailure(Component.literal(result.error()));
+            ctx.getSource().sendFailure(result.errorComponent());
             return 0;
         }
 
@@ -54,24 +82,58 @@ public final class RollbackCommand {
 
         var mgr = GriefloggerRollbackAddon.ROLLBACK_MANAGER;
         if (mgr == null) {
-            ctx.getSource().sendFailure(Component.literal("Rollback manager not initialized"));
+            ctx.getSource().sendFailure(Component.translatable(NOT_INITIALIZED_KEY));
             return 0;
         }
 
         var area = buildArea(ctx, args.radius());
 
-        mgr.startRollback(since, args.player(), area, args.kind());
-        Supplier<Component> msg = () -> Component.literal(buildSuccessMessage(args));
+        mgr.startRollback(since, args.timeLabel(), args.player(), area, args.radiusLabel(), args.kind());
+        try {
+            ServerLevel level = ctx.getSource().getLevel();
+            if (level != null) {
+                var player = ctx.getSource().getPlayer();
+                if (player != null) {
+                    mgr.trackActionBar(player);
+                }
+            }
+        } catch (Exception ignored) {
+            // No player attached to the command source (e.g., console).
+        }
+        Supplier<Component> msg = () -> buildSuccessComponent(args);
         ctx.getSource().sendSuccess(msg, true);
         return 1;
     }
 
-    private static String buildSuccessMessage(ParsedArgs args) {
-        StringBuilder sb = new StringBuilder("Rollback job started for last ").append(args.timeLabel());
-        args.player().ifPresent(u -> sb.append(", player=").append(u));
-        args.radius().ifPresent(r -> sb.append(", radius=").append(r.value()).append(r.inChunks() ? " chunks" : " blocks"));
-        sb.append(", scope=").append(describeKind(args.kind()));
-        return sb.toString();
+    @SuppressWarnings("null")
+    private static MutableComponent buildSuccessComponent(ParsedArgs args) {
+        MutableComponent header = Component.translatable(STARTED_KEY)
+                .withStyle(ChatFormatting.GREEN, ChatFormatting.BOLD);
+
+        MutableComponent body = Component.empty()
+                .append(Component.translatable(WINDOW_LABEL_KEY).withStyle(ChatFormatting.GRAY))
+                .append(Component.translatable(WINDOW_VALUE_KEY, args.timeLabel()).withStyle(ChatFormatting.WHITE));
+
+        if (args.player().isPresent()) {
+            body = body.append(Component.literal(" | ").withStyle(ChatFormatting.DARK_GRAY))
+                    .append(Component.translatable(PLAYER_LABEL_KEY).withStyle(ChatFormatting.GRAY))
+                    .append(Component.literal(args.player().get()).withStyle(ChatFormatting.AQUA));
+        }
+
+        if (args.radius().isPresent()) {
+            body = body.append(Component.literal(" | ").withStyle(ChatFormatting.DARK_GRAY))
+                    .append(Component.translatable(RADIUS_LABEL_KEY).withStyle(ChatFormatting.GRAY))
+                    .append(radiusDisplay(args.radius().get()));
+        }
+
+        body = body.append(Component.literal(" | ").withStyle(ChatFormatting.DARK_GRAY))
+                .append(Component.translatable(SCOPE_LABEL_KEY).withStyle(ChatFormatting.GRAY))
+                .append(describeKindComponent(args.kind()).withStyle(ChatFormatting.GOLD));
+
+        return Component.empty()
+                .append(header)
+                .append(Component.literal("\n"))
+                .append(body);
     }
 
     private static ParseResult parseArgs(String raw) {
@@ -88,19 +150,19 @@ public final class RollbackCommand {
             String normalized = trimmed.toLowerCase();
 
             if (normalized.equals("i")) {
-                if (kind != RollbackManager.RollbackKind.BOTH) return ParseResult.error("Duplicate block/item argument");
+                if (kind != RollbackManager.RollbackKind.BOTH) return ParseResult.error(DUPLICATE_KIND_KEY);
                 kind = RollbackManager.RollbackKind.ITEMS_ONLY;
                 continue;
             }
             if (normalized.equals("b")) {
-                if (kind != RollbackManager.RollbackKind.BOTH) return ParseResult.error("Duplicate block/item argument");
+                if (kind != RollbackManager.RollbackKind.BOTH) return ParseResult.error(DUPLICATE_KIND_KEY);
                 kind = RollbackManager.RollbackKind.BLOCKS_ONLY;
                 continue;
             }
 
             int colon = trimmed.indexOf(':');
             if (colon <= 0 || colon == trimmed.length() - 1) {
-                return ParseResult.error("Invalid argument: " + token);
+                return ParseResult.error(INVALID_ARGUMENT_KEY, token);
             }
 
             String key = trimmed.substring(0, colon).toLowerCase();
@@ -108,38 +170,38 @@ public final class RollbackCommand {
 
             switch (key) {
                 case "u":
-                    if (player.isPresent()) return ParseResult.error("Duplicate user argument");
+                    if (player.isPresent()) return ParseResult.error(DUPLICATE_USER_KEY);
                     player = Optional.of(value);
                     break;
                 case "t":
-                    if (durationMs != null) return ParseResult.error("Duplicate time argument");
+                    if (durationMs != null) return ParseResult.error(DUPLICATE_TIME_KEY);
                     long parsedDuration = parseDurationToMillis(value);
-                    if (parsedDuration <= 0) return ParseResult.error("Invalid time value: " + value);
+                    if (parsedDuration <= 0) return ParseResult.error(INVALID_TIME_KEY, value);
                     durationMs = parsedDuration;
                     timeLabel = value;
                     break;
                 case "r":
-                    if (radius != null) return ParseResult.error("Duplicate radius argument");
+                    if (radius != null) return ParseResult.error(DUPLICATE_RADIUS_KEY);
                     radius = parseRadius(value);
-                    if (radius == null) return ParseResult.error("Invalid radius value: " + value);
+                    if (radius == null) return ParseResult.error(INVALID_RADIUS_KEY, value);
                     break;
                 case "i":
                 case "items":
-                    if (kind != RollbackManager.RollbackKind.BOTH) return ParseResult.error("Duplicate block/item argument");
+                    if (kind != RollbackManager.RollbackKind.BOTH) return ParseResult.error(DUPLICATE_KIND_KEY);
                     kind = RollbackManager.RollbackKind.ITEMS_ONLY;
                     break;
                 case "b":
                 case "blocks":
-                    if (kind != RollbackManager.RollbackKind.BOTH) return ParseResult.error("Duplicate block/item argument");
+                    if (kind != RollbackManager.RollbackKind.BOTH) return ParseResult.error(DUPLICATE_KIND_KEY);
                     kind = RollbackManager.RollbackKind.BLOCKS_ONLY;
                     break;
                 default:
-                    return ParseResult.error("Unknown argument: " + key);
+                    return ParseResult.error(UNKNOWN_ARGUMENT_KEY, key);
             }
         }
 
         if (durationMs == null) {
-            return ParseResult.error("Missing time argument (t:)");
+            return ParseResult.error(MISSING_TIME_KEY);
         }
 
         return ParseResult.success(new ParsedArgs(player, durationMs, timeLabel == null ? "provided time" : timeLabel, Optional.ofNullable(radius), kind));
@@ -231,21 +293,33 @@ public final class RollbackCommand {
         }
     }
 
-    private record Radius(int value, boolean inChunks) {}
+    private record Radius(int value, boolean inChunks) {
+        String label() {
+            return value + (inChunks ? "c" : "b");
+        }
+    }
 
-    private record ParsedArgs(Optional<String> player, long durationMs, String timeLabel, Optional<Radius> radius, RollbackManager.RollbackKind kind) {}
+    private record ParsedArgs(Optional<String> player, long durationMs, String timeLabel, Optional<Radius> radius, RollbackManager.RollbackKind kind) {
+        Optional<String> radiusLabel() {
+            return radius.map(Radius::label);
+        }
+    }
 
-    private record ParseResult(ParsedArgs args, String error) {
+    private record ParseResult(ParsedArgs args, String errorKey, Object[] errorArgs) {
         static ParseResult success(ParsedArgs args) {
-            return new ParseResult(args, null);
+            return new ParseResult(args, null, new Object[0]);
         }
 
-        static ParseResult error(String msg) {
-            return new ParseResult(null, msg);
+        static ParseResult error(String key, Object... args) {
+            return new ParseResult(null, key, args == null ? new Object[0] : args);
         }
 
         boolean success() {
-            return error == null && args != null;
+            return errorKey == null && args != null;
+        }
+
+        Component errorComponent() {
+            return Component.translatable(errorKey, errorArgs);
         }
     }
 
@@ -257,6 +331,7 @@ public final class RollbackCommand {
             ServerLevel level = ctx.getSource().getLevel();
             if (level == null) return Optional.empty();
 
+            @SuppressWarnings("null")
             BlockPos center = BlockPos.containing(ctx.getSource().getPosition());
             int radiusBlocks = radius.inChunks() ? radius.value() * 16 : radius.value();
             return Optional.of(new RollbackManager.RollbackArea(level.dimension(), center, radiusBlocks));
@@ -266,11 +341,16 @@ public final class RollbackCommand {
         }
     }
 
-    private static String describeKind(RollbackManager.RollbackKind kind) {
+    private static MutableComponent describeKindComponent(RollbackManager.RollbackKind kind) {
         return switch (kind) {
-            case BLOCKS_ONLY -> "blocks only";
-            case ITEMS_ONLY -> "items only";
-            default -> "blocks + items";
+            case BLOCKS_ONLY -> Component.translatable(SCOPE_BLOCKS_KEY);
+            case ITEMS_ONLY -> Component.translatable(SCOPE_ITEMS_KEY);
+            default -> Component.translatable(SCOPE_BOTH_KEY);
         };
+    }
+
+    private static MutableComponent radiusDisplay(Radius radius) {
+        String key = radius.inChunks() ? RADIUS_CHUNKS_VALUE_KEY : RADIUS_BLOCKS_VALUE_KEY;
+        return Component.translatable(key, radius.value()).withStyle(ChatFormatting.YELLOW);
     }
 }
