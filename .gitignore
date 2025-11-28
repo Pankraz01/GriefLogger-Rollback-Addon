@@ -16,6 +16,7 @@ out
 # gradle
 build
 .gradle
+.gradle-cache
 
 # other
 eclipse
@@ -24,3 +25,4 @@ runs
 run-data
 
 repo
+.vscode

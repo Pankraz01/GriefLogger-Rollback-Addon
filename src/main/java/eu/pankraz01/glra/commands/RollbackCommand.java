@@ -18,7 +18,7 @@ import eu.pankraz01.glra.GriefloggerRollbackAddon;
 import eu.pankraz01.glra.rollback.RollbackManager;
 
 public final class RollbackCommand {
-    private static final String USAGE = "Usage: /gl rollback u:<user> t:<time (s|m|h|d|M|y)> r:<radius|c<chunks>>";
+    private static final String USAGE = "Usage: /gl rollback u:<user> t:<time (s|m|h|d|M|y)> r:<radius|c<chunks>> [i|b]";
 
     public static void register(CommandDispatcher<CommandSourceStack> dispatcher) {
         dispatcher.register(Commands.literal("gl")
@@ -60,7 +60,7 @@ public final class RollbackCommand {
 
         var area = buildArea(ctx, args.radius());
 
-        mgr.startRollback(since, args.player(), area);
+        mgr.startRollback(since, args.player(), area, args.kind());
         Supplier<Component> msg = () -> Component.literal(buildSuccessMessage(args));
         ctx.getSource().sendSuccess(msg, true);
         return 1;
@@ -70,6 +70,7 @@ public final class RollbackCommand {
         StringBuilder sb = new StringBuilder("Rollback job started for last ").append(args.timeLabel());
         args.player().ifPresent(u -> sb.append(", player=").append(u));
         args.radius().ifPresent(r -> sb.append(", radius=").append(r.value()).append(r.inChunks() ? " chunks" : " blocks"));
+        sb.append(", scope=").append(describeKind(args.kind()));
         return sb.toString();
     }
 
@@ -78,17 +79,32 @@ public final class RollbackCommand {
         Long durationMs = null;
         String timeLabel = null;
         Radius radius = null;
+        RollbackManager.RollbackKind kind = RollbackManager.RollbackKind.BOTH;
 
         for (String token : raw.split("\\s+")) {
             if (token.isBlank()) continue;
 
-            int colon = token.indexOf(':');
-            if (colon <= 0 || colon == token.length() - 1) {
+            String trimmed = token.trim();
+            String normalized = trimmed.toLowerCase();
+
+            if (normalized.equals("i")) {
+                if (kind != RollbackManager.RollbackKind.BOTH) return ParseResult.error("Duplicate block/item argument");
+                kind = RollbackManager.RollbackKind.ITEMS_ONLY;
+                continue;
+            }
+            if (normalized.equals("b")) {
+                if (kind != RollbackManager.RollbackKind.BOTH) return ParseResult.error("Duplicate block/item argument");
+                kind = RollbackManager.RollbackKind.BLOCKS_ONLY;
+                continue;
+            }
+
+            int colon = trimmed.indexOf(':');
+            if (colon <= 0 || colon == trimmed.length() - 1) {
                 return ParseResult.error("Invalid argument: " + token);
             }
 
-            String key = token.substring(0, colon).toLowerCase();
-            String value = token.substring(colon + 1);
+            String key = trimmed.substring(0, colon).toLowerCase();
+            String value = trimmed.substring(colon + 1);
 
             switch (key) {
                 case "u":
@@ -107,6 +123,16 @@ public final class RollbackCommand {
                     radius = parseRadius(value);
                     if (radius == null) return ParseResult.error("Invalid radius value: " + value);
                     break;
+                case "i":
+                case "items":
+                    if (kind != RollbackManager.RollbackKind.BOTH) return ParseResult.error("Duplicate block/item argument");
+                    kind = RollbackManager.RollbackKind.ITEMS_ONLY;
+                    break;
+                case "b":
+                case "blocks":
+                    if (kind != RollbackManager.RollbackKind.BOTH) return ParseResult.error("Duplicate block/item argument");
+                    kind = RollbackManager.RollbackKind.BLOCKS_ONLY;
+                    break;
                 default:
                     return ParseResult.error("Unknown argument: " + key);
             }
@@ -116,7 +142,7 @@ public final class RollbackCommand {
             return ParseResult.error("Missing time argument (t:)");
         }
 
-        return ParseResult.success(new ParsedArgs(player, durationMs, timeLabel == null ? "provided time" : timeLabel, Optional.ofNullable(radius)));
+        return ParseResult.success(new ParsedArgs(player, durationMs, timeLabel == null ? "provided time" : timeLabel, Optional.ofNullable(radius), kind));
     }
 
     private static long parseDurationToMillis(String value) {
@@ -207,7 +233,7 @@ public final class RollbackCommand {
 
     private record Radius(int value, boolean inChunks) {}
 
-    private record ParsedArgs(Optional<String> player, long durationMs, String timeLabel, Optional<Radius> radius) {}
+    private record ParsedArgs(Optional<String> player, long durationMs, String timeLabel, Optional<Radius> radius, RollbackManager.RollbackKind kind) {}
 
     private record ParseResult(ParsedArgs args, String error) {
         static ParseResult success(ParsedArgs args) {
@@ -238,5 +264,13 @@ public final class RollbackCommand {
             GriefloggerRollbackAddon.LOGGER.warn(GriefloggerRollbackAddon.MOD_PREFIX + "Could not determine rollback area from command source", e);
             return Optional.empty();
         }
+    }
+
+    private static String describeKind(RollbackManager.RollbackKind kind) {
+        return switch (kind) {
+            case BLOCKS_ONLY -> "blocks only";
+            case ITEMS_ONLY -> "items only";
+            default -> "blocks + items";
+        };
     }
 }

@@ -6,7 +6,7 @@ This NeoForge addon reads [GriefLogger](https://github.com/DAQEM/GriefLogger) da
 
 Features
 --------
-- Rollback of block changes from the GriefLogger database (`blocks` table joined with `materials`, `users`, `levels`).
+- Rollback of block changes and container/inventory changes from the GriefLogger database (`blocks` + `containers` tables with joins to `materials`, `users`, `levels`).
 - Filters by time window, optional player name, and optional radius around the command executor.
 - Ensures target chunks are loaded before changing blocks.
 - Progress logging and batch processing per tick to keep the server responsive.
@@ -40,35 +40,40 @@ Configuration (`config/grieflogger/griefloggerrollbackaddon-common.toml`)
 
 Command: `/gl rollback`
 -----------------------
-Syntax: `/gl rollback t:<time> [u:<player>] [r:<radius|c<chunks>>]`
+Syntax: `/gl rollback t:<time> [u:<player>] [r:<radius|c<chunks>>] [i|b]`
 
 - `t:` Required time window to roll back. Supported units: `ms`, `s`, `m`, `h`, `d`, `M` (30 days), `y`. Examples: `t:30m`, `t:12h`, `t:90s`.
 - `u:` Optional exact player name (matches the `users` table).
 - `r:` Optional radius. Default uses blocks (`r:25`). Prefix `c` switches to chunks (`r:c4` = radius of 4 chunks). Prefix `b` forces blocks (`r:b40`).
+- `i` Optional flag: only roll back inventory/container changes (items).
+- `b` Optional flag: only roll back block changes. If neither `i` nor `b` is given, both are rolled back.
 
 Examples
 - `/gl rollback t:2h` - Roll back all actions from the last 2 hours.
 - `/gl rollback t:1d u:Griefer123` - Only that player's actions in the last 24h.
 - `/gl rollback t:30m r:c2` - Within 2 chunks around the executor.
 - `/gl rollback t:10m u:User r:20` - Player filter plus 20-block radius.
+- `/gl rollback t:45m i` - Only inventory/container changes from the last 45 minutes.
+- `/gl rollback t:10m b r:15` - Only block changes within 15 blocks from the last 10 minutes.
 
 How it works
 ------------
 1. Server start: immediately tests a DB connection. On failure, the addon disables itself (no commands/events).
 2. Command: `/gl rollback ...` starts a job:
-   - Loads matching entries from `blocks` since the given time in a background thread, optionally filtered by player and/or radius.
+   - Loads matching entries from `blocks` and `containers` since the given time in a background thread, optionally filtered by player and/or radius.
    - Reconstructs the previous block state per coordinate (`oldMaterialName`) so placements and breaks can be inverted correctly.
-   - Enqueues all actions for processing.
+   - Enqueues all actions (blocks + inventory operations) for processing, newest first so the latest change is undone first.
 3. Server ticks: up to `rollbackBatchSize` actions are processed each tick:
    - `BREAK` logs restore the broken block from the DB entry.
    - `PLACE` logs restore the previous block state.
+   - Container logs remove items that were inserted and add back items (including stored NBT) that were taken. If a container is full, overflow is dropped at the container position.
    - Unknown/other codes fall back to restoring the previous state (or air).
    - The target chunk is loaded before setting the block.
 4. Progress: every `progressTickInterval` ticks, the queue size and processed count are logged. When the queue is empty, the job finishes.
 
-Notes and limitations
----------------------
-- Only block changes (`blocks` table) are covered; items/inventories are not.
+ Notes and limitations
+ ---------------------
+- If a container has no space while items are restored, the overflow is dropped as item entities next to the container.
 - Dimension mapping uses `levels.name` (ResourceLocation) or falls back for IDs 1/2/3 (Overworld/End/Nether).
 - Invalid or unknown block names default to `minecraft:air` with a warning.
 - The JDBC driver is not bundled in the mod JAR; it must be provided separately.
@@ -79,3 +84,17 @@ Development/Building
 - Java 21, Gradle wrapper included. Build locally with `./gradlew build` (or `gradlew.bat build` on Windows).
 - MariaDB, MySQL, and SQLite drivers are declared as `localRuntime`; provide the driver JAR separately for production.
 
+
+
+
+dbHost = "172.18.0.1"
+#MariaDB port
+# Default: 3306
+# Range: 1 ~ 65535
+dbPort = 3306
+#MariaDB database name
+dbName = "s162_grieflogger_test"
+#MariaDB user
+dbUser = "u162_BUwcLJOvFz"
+#MariaDB password
+dbPassword = "xGd0MZHV8o3DmZxV+5HYe!S1"

@@ -23,7 +23,10 @@
       "label": "Gradle Clean Build",
       "type": "shell",
       "command": "./gradlew.bat clean build",
-      "group": "build",
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
       "problemMatcher": []
     }
   ]

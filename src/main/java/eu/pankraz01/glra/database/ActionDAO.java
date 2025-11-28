@@ -16,6 +16,53 @@ import java.util.Optional;
  */
 public final class ActionDAO {
     /**
+     * Load container (inventory) actions since `sinceMillis`. Player filter is optional and matches the username.
+     * Returns a list ordered by time DESC.
+     */
+    public List<ContainerAction> loadContainerActions(long sinceMillis, Optional<String> player) throws SQLException {
+        final List<ContainerAction> result = new ArrayList<>();
+
+        final StringBuilder sql = new StringBuilder();
+        sql.append("SELECT c.time AS ts, c.user AS user_id, u.name AS player_name, c.level AS level_id, l.name AS level_name, ");
+        sql.append("c.x, c.y, c.z, c.type AS material_id, m.name AS material_name, c.data AS item_data, c.amount AS amount, c.action AS action_code ");
+        sql.append("FROM containers c ");
+        sql.append("LEFT JOIN materials m ON m.id = c.type ");
+        sql.append("LEFT JOIN users u ON u.id = c.user ");
+        sql.append("LEFT JOIN levels l ON l.id = c.level ");
+        sql.append("WHERE c.time >= ? ");
+        if (player.isPresent()) sql.append("AND u.name = ? ");
+        sql.append("ORDER BY c.time DESC");
+
+        try (Connection conn = DBConnection.getConnection(); PreparedStatement ps = conn.prepareStatement(sql.toString())) {
+            int idx = 1;
+            ps.setLong(idx++, sinceMillis);
+            if (player.isPresent()) ps.setString(idx++, player.get());
+
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    long ts = rs.getLong("ts");
+                    int userId = rs.getInt("user_id");
+                    String playerName = rs.getString("player_name");
+                    int levelId = rs.getInt("level_id");
+                    String levelName = rs.getString("level_name");
+                    int x = rs.getInt("x");
+                    int y = rs.getInt("y");
+                    int z = rs.getInt("z");
+                    int materialId = rs.getInt("material_id");
+                    String materialName = rs.getString("material_name");
+                    byte[] data = rs.getBytes("item_data");
+                    int amount = rs.getInt("amount");
+                    int actionCode = rs.getInt("action_code");
+
+                    result.add(new ContainerAction(ts, userId, playerName, levelId, levelName, x, y, z, materialId, materialName, data, amount, actionCode));
+                }
+            }
+        }
+
+        return result;
+    }
+
+    /**
      * Load block actions since `sinceMillis`. Player filter is optional and matches the username.
      * Returns a list ordered by time DESC.
      */
