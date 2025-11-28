@@ -53,6 +53,51 @@ public class Config {
             .comment("How many ticks between progress logs during a running rollback")
             .defineInRange("progressTickInterval", 20, 1, 1200);
 
+    // Lightweight web UI / HTTP API for triggering rollbacks from outside the game
+    public static final ModConfigSpec.BooleanValue WEB_API_ENABLED = BUILDER
+            .comment("Enable a small built-in HTTP server with a web UI to trigger rollbacks (default: false)")
+            .define("webApiEnabled", false);
+
+    public static final ModConfigSpec.BooleanValue REQUIRE_API_TOKEN = BUILDER
+            .comment("Require a non-empty webApiToken for all web UI/API calls; if true and token is empty, the web UI is disabled")
+            .define("requireApiToken", false);
+
+    static {
+        BUILDER.push("logUnauthorizedWebAccess");
+    }
+
+    public static final ModConfigSpec.BooleanValue LOG_UNAUTHORIZED_WEB_ACCESS = BUILDER
+            .comment("Log unauthorized web UI/API requests to the database (table glra_web_unauthorized); keeps latest 1000 entries")
+            .define("enabled", false);
+
+    public static final ModConfigSpec.BooleanValue LOG_UNAUTHORIZED_WEB_HEADERS = BUILDER
+            .comment("If enabled, store request headers for unauthorized web requests")
+            .define("logHeaders", false);
+
+    public static final ModConfigSpec.BooleanValue LOG_UNAUTHORIZED_WEB_BODY = BUILDER
+            .comment("If enabled, store request body for unauthorized web requests (may include tokens!)")
+            .define("logBody", false);
+
+    public static final ModConfigSpec.BooleanValue LOG_UNAUTHORIZED_WEB_QUERY = BUILDER
+            .comment("If enabled, store query string for unauthorized web requests")
+            .define("logQuery", true);
+
+    static {
+        BUILDER.pop();
+    }
+
+    public static final ModConfigSpec.ConfigValue<String> WEB_API_BIND_ADDRESS = BUILDER
+            .comment("Bind address for the web UI / HTTP API (use 127.0.0.1 to keep it local)")
+            .define("webApiBindAddress", "0.0.0.0");
+
+    public static final ModConfigSpec.IntValue WEB_API_PORT = BUILDER
+            .comment("Port for the web UI / HTTP API")
+            .defineInRange("webApiPort", 8765, 1, 65535);
+
+    public static final ModConfigSpec.ConfigValue<String> WEB_API_TOKEN = BUILDER
+            .comment("Optional shared secret required for web requests; leave empty to disable auth (not recommended)")
+            .define("webApiToken", "");
+
     static final ModConfigSpec SPEC = BUILDER.build();
 
     public static DatabaseType databaseType() {

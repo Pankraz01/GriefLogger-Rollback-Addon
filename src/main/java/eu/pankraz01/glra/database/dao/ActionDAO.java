@@ -1,4 +1,4 @@
-package eu.pankraz01.glra.database;
+package eu.pankraz01.glra.database.dao;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -9,6 +9,10 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+
+import eu.pankraz01.glra.database.Action;
+import eu.pankraz01.glra.database.ContainerAction;
+import eu.pankraz01.glra.database.DBConnection;
 
 /**
  * DAO for loading actions from the griefLogger DB schema (blocks/items).
@@ -126,5 +130,45 @@ public final class ActionDAO {
 
     private static String normalizeMaterial(String materialName) {
         return (materialName == null || materialName.isEmpty()) ? "minecraft:air" : materialName;
+    }
+
+    /**
+     * Load all known player usernames from the `users` table.
+     */
+    public List<String> loadAllUsernames() throws SQLException {
+        final List<String> result = new ArrayList<>();
+        final String sql = "SELECT name FROM users WHERE name IS NOT NULL ORDER BY name ASC";
+
+        try (Connection conn = DBConnection.getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    String name = rs.getString("name");
+                    if (name != null && !name.isBlank()) {
+                        result.add(name);
+                    }
+                }
+            }
+        }
+        return result;
+    }
+
+    /**
+     * Load all known dimensions from the `levels` table (names are ResourceLocations).
+     */
+    public List<String> loadAllDimensions() throws SQLException {
+        final List<String> result = new ArrayList<>();
+        final String sql = "SELECT name FROM levels WHERE name IS NOT NULL ORDER BY name ASC";
+
+        try (Connection conn = DBConnection.getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    String name = rs.getString("name");
+                    if (name != null && !name.isBlank()) {
+                        result.add(name);
+                    }
+                }
+            }
+        }
+        return result;
     }
 }
