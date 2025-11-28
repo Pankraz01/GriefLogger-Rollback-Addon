@@ -38,14 +38,19 @@ Configuration (`config/grieflogger/griefloggerrollbackaddon-common.toml`)
 - `dbHost` (String, default `localhost`): MySQL/MariaDB host.
 - `dbPort` (Int, default `3306`): MySQL/MariaDB port.
 - `dbName` (String, default `grieflogger`): Database name for MySQL/MariaDB.
-- `dbUser` (String): Database user for MySQL/MariaDB.
-- `dbPassword` (String): Database password for MySQL/MariaDB.
+- `dbUser` (String, default `root`): Database user for MySQL/MariaDB.
+- `dbPassword` (String, default empty): Database password for MySQL/MariaDB.
 - `rollbackBatchSize` (Int, default `200`): Number of actions processed per tick.
 - `progressTickInterval` (Int, default `20`): How many ticks between progress log messages.
 - `webApiEnabled` (Boolean, default `false`): Start a small HTTP server with a web UI to trigger rollbacks.
+- `requireApiToken` (Boolean, default `false`): If true and `webApiToken` is empty, the web UI/API is disabled; otherwise every request must include the token.
 - `webApiBindAddress` (String, default `0.0.0.0`): Bind address for the web UI/API.
 - `webApiPort` (Int, default `8765`): Port for the web UI/API.
 - `webApiToken` (String, default empty): Optional shared secret required for web requests. Leave empty only on localhost.
+- `logUnauthorizedWebAccess.enabled` (Boolean, default `false`): Log unauthorized web requests to DB table `glra_web_unauthorized` (keeps the latest 1000 entries).
+- `logUnauthorizedWebAccess.logHeaders` (Boolean, default `false`): Store request headers for unauthorized web requests.
+- `logUnauthorizedWebAccess.logBody` (Boolean, default `false`): Store request body for unauthorized web requests (may include tokens).
+- `logUnauthorizedWebAccess.logQuery` (Boolean, default `true`): Store query string for unauthorized web requests.
 
 Command: `/gl rollback`
 -----------------------
