@@ -1,4 +1,6 @@
-{
+{ 
+  "message.griefloggerrollbackaddon.prefix": "[GLRA] ",
+  "message.griefloggerrollbackaddon.separator": " | ",
   "message.griefloggerrollbackaddon.rollback.usage": "Usage: /gl rollback u:<user> t:<time (s|m|h|d|M|y)> r:<radius|c<chunks>> [i|b]",
   "message.griefloggerrollbackaddon.rollback.disabled": "Rollback addon is disabled because no database connection was available during startup",
   "message.griefloggerrollbackaddon.rollback.not_initialized": "Rollback manager not initialized",
@@ -22,6 +24,7 @@
   "message.griefloggerrollbackaddon.rollback.scope.blocks_only": "blocks only",
   "message.griefloggerrollbackaddon.rollback.scope.items_only": "items only",
   "message.griefloggerrollbackaddon.rollback.scope.both": "blocks + items",
+  "message.griefloggerrollbackaddon.rollback.triggered_by": "Triggered by: ",
   "message.griefloggerrollbackaddon.actionbar.done": "Rollback Done",
   "message.griefloggerrollbackaddon.actionbar.failed": "Rollback Failed",
   "message.griefloggerrollbackaddon.actionbar.cancelled": "Rollback Cancelled",
@@ -67,6 +70,12 @@
   "message.griefloggerrollbackaddon.web.token.list.title": "Web tokens (page %s)",
   "message.griefloggerrollbackaddon.web.token.list.empty": "No tokens available.",
   "message.griefloggerrollbackaddon.web.token.list.copy_hint": "Click to copy token",
+  "message.griefloggerrollbackaddon.web.broadcast.started": "Web rollback started",
+  "message.griefloggerrollbackaddon.web.broadcast.blocked": "Web access blocked",
+  "message.griefloggerrollbackaddon.web.broadcast.ip": "IP: ",
+  "message.griefloggerrollbackaddon.web.broadcast.path": "Path: ",
+  "message.griefloggerrollbackaddon.web.broadcast.method": "Method: ",
+  "message.griefloggerrollbackaddon.web.broadcast.reason": "Reason: ",
   "message.griefloggerrollbackaddon.web.server.started": "Web server started",
   "message.griefloggerrollbackaddon.web.server.stopped": "Web server stopped",
   "message.griefloggerrollbackaddon.web.server.already_running": "Web server already running",
