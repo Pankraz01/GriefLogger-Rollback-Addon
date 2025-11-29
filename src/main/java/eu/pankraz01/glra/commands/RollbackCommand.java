@@ -19,6 +19,7 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.MinecraftServer;
 
 import eu.pankraz01.glra.GriefloggerRollbackAddon;
+import eu.pankraz01.glra.Messages;
 import eu.pankraz01.glra.Permissions;
 import eu.pankraz01.glra.rollback.RollbackManager;
 import eu.pankraz01.glra.rollback.RollbackInputParser;
@@ -49,6 +50,7 @@ public final class RollbackCommand {
     private static final String SCOPE_BLOCKS_KEY = LANG_BASE + "scope.blocks_only";
     private static final String SCOPE_ITEMS_KEY = LANG_BASE + "scope.items_only";
     private static final String SCOPE_BOTH_KEY = LANG_BASE + "scope.both";
+    private static final String TRIGGERED_BY_LABEL_KEY = LANG_BASE + "triggered_by";
     private static final RollbackHistoryDAO HISTORY = new RollbackHistoryDAO();
 
     @SuppressWarnings("null")
@@ -285,17 +287,17 @@ public final class RollbackCommand {
         String radiusLabel = args.radiusLabel().orElse("global");
         String scope = describeKindComponent(args.kind()).getString();
 
-        MutableComponent header = Component.literal("[GLRA] Rollback started").withStyle(ChatFormatting.GREEN, ChatFormatting.BOLD);
+        MutableComponent header = Messages.header(STARTED_KEY, "Rollback started", ChatFormatting.GREEN);
         MutableComponent body = Component.empty()
-                .append(labelValue("Time window: ", time, ChatFormatting.WHITE))
-                .append(separator())
-                .append(labelValue("Player: ", playerLabel, ChatFormatting.AQUA))
-                .append(separator())
-                .append(labelValue("Radius: ", radiusLabel, ChatFormatting.YELLOW))
-                .append(separator())
-                .append(labelValue("Scope: ", scope, ChatFormatting.GOLD))
-                .append(separator())
-                .append(labelValue("Triggered by: ", actor, ChatFormatting.GREEN));
+                .append(Messages.labelValue(WINDOW_LABEL_KEY, "Window: ", tr(WINDOW_VALUE_KEY, "last %s", time), ChatFormatting.WHITE))
+                .append(Messages.separator())
+                .append(Messages.labelValue(PLAYER_LABEL_KEY, "Player: ", Component.literal(playerLabel), ChatFormatting.AQUA))
+                .append(Messages.separator())
+                .append(Messages.labelValue(RADIUS_LABEL_KEY, "Radius: ", Component.literal(radiusLabel), ChatFormatting.YELLOW))
+                .append(Messages.separator())
+                .append(Messages.labelValue(SCOPE_LABEL_KEY, "Scope: ", describeKindComponent(args.kind()), ChatFormatting.GOLD))
+                .append(Messages.separator())
+                .append(Messages.labelValue(TRIGGERED_BY_LABEL_KEY, "Triggered by: ", Component.literal(actor), ChatFormatting.GREEN));
 
         Component message = Component.empty().append(header).append(Component.literal("\n")).append(body);
         broadcast(server, message, initiator);
@@ -315,15 +317,6 @@ public final class RollbackCommand {
         } catch (Exception ignored) {
             // If console is not available, ignore.
         }
-    }
-
-    private static MutableComponent labelValue(String label, String value, ChatFormatting valueColor) {
-        return Component.literal(label).withStyle(ChatFormatting.GRAY)
-                .append(Component.literal(value == null ? "" : value).withStyle(valueColor));
-    }
-
-    private static Component separator() {
-        return Component.literal(" | ").withStyle(ChatFormatting.DARK_GRAY);
     }
 
     private static MutableComponent radiusDisplay(RollbackInputParser.Radius radius) {
@@ -349,6 +342,7 @@ public final class RollbackCommand {
             case INVALID_RADIUS_KEY -> "Invalid radius value: %s";
             case UNKNOWN_ARGUMENT_KEY -> "Unknown argument: %s";
             case MISSING_TIME_KEY -> "Missing time argument (t:)";
+            case TRIGGERED_BY_LABEL_KEY -> "Triggered by: ";
             default -> key;
         };
     }

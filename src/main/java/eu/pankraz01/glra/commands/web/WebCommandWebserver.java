@@ -8,6 +8,7 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.ChatFormatting;
 
 import eu.pankraz01.glra.GriefloggerRollbackAddon;
+import eu.pankraz01.glra.Messages;
 import eu.pankraz01.glra.Permissions;
 
 /**
@@ -86,9 +87,8 @@ public final class WebCommandWebserver {
     }
 
     private static Component status(String key, String fallback, ChatFormatting color) {
-        var prefix = Component.literal("[GLRA] ").withStyle(ChatFormatting.GOLD);
         var body = Component.translatableWithFallback(key, fallback).copy().withStyle(color, ChatFormatting.BOLD);
-        return Component.empty().append(prefix).append(body);
+        return Messages.prefixed(body);
     }
 
     private static Object arg(Object[] args) {
