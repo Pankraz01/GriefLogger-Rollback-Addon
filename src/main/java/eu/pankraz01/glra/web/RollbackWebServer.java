@@ -22,6 +22,7 @@ import com.mojang.logging.LogUtils;
 import eu.pankraz01.glra.Config;
 import eu.pankraz01.glra.rollback.RollbackInputParser;
 import eu.pankraz01.glra.rollback.RollbackManager;
+import eu.pankraz01.glra.Messages;
 import net.minecraft.ChatFormatting;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.Registries;
@@ -45,6 +46,17 @@ import net.neoforged.neoforge.server.permission.nodes.PermissionNode;
  */
 public final class RollbackWebServer {
     private static final Logger LOGGER = LogUtils.getLogger();
+    private static final String ROLLBACK_WINDOW_LABEL_KEY = "message.griefloggerrollbackaddon.rollback.window.label";
+    private static final String ROLLBACK_PLAYER_LABEL_KEY = "message.griefloggerrollbackaddon.rollback.player.label";
+    private static final String ROLLBACK_RADIUS_LABEL_KEY = "message.griefloggerrollbackaddon.rollback.radius.label";
+    private static final String ROLLBACK_SCOPE_LABEL_KEY = "message.griefloggerrollbackaddon.rollback.scope.label";
+    private static final String ROLLBACK_TRIGGER_KEY = "message.griefloggerrollbackaddon.rollback.triggered_by";
+    private static final String WEB_BROADCAST_STARTED_KEY = "message.griefloggerrollbackaddon.web.broadcast.started";
+    private static final String WEB_BROADCAST_BLOCKED_KEY = "message.griefloggerrollbackaddon.web.broadcast.blocked";
+    private static final String WEB_IP_LABEL_KEY = "message.griefloggerrollbackaddon.web.broadcast.ip";
+    private static final String WEB_PATH_LABEL_KEY = "message.griefloggerrollbackaddon.web.broadcast.path";
+    private static final String WEB_METHOD_LABEL_KEY = "message.griefloggerrollbackaddon.web.broadcast.method";
+    private static final String WEB_REASON_LABEL_KEY = "message.griefloggerrollbackaddon.web.broadcast.reason";
 
     private final RollbackManager rollbackManager;
     private final MinecraftServer server;
@@ -349,18 +361,18 @@ public final class RollbackWebServer {
         String radiusLabel = radius.label().orElse("global");
         String scope = kind.describe();
 
-        MutableComponent header = Component.literal("[GLRA] Web rollback started").withStyle(ChatFormatting.GREEN, ChatFormatting.BOLD);
+        MutableComponent header = Messages.header(WEB_BROADCAST_STARTED_KEY, "Web rollback started", ChatFormatting.GREEN);
         MutableComponent body = Component.empty()
-                .append(labelValue("Time window: ", timeRaw, ChatFormatting.WHITE));
+                .append(Messages.labelValue(ROLLBACK_WINDOW_LABEL_KEY, "Window: ", Component.literal(timeRaw), ChatFormatting.WHITE));
 
         if (!playerLabel.isBlank()) {
-            body = body.append(separator()).append(labelValue("Player: ", playerLabel, ChatFormatting.AQUA));
+            body = body.append(Messages.separator()).append(Messages.labelValue(ROLLBACK_PLAYER_LABEL_KEY, "Player: ", Component.literal(playerLabel), ChatFormatting.AQUA));
         }
         if (!radiusLabel.isBlank()) {
-            body = body.append(separator()).append(labelValue("Radius: ", radiusLabel, ChatFormatting.YELLOW));
+            body = body.append(Messages.separator()).append(Messages.labelValue(ROLLBACK_RADIUS_LABEL_KEY, "Radius: ", Component.literal(radiusLabel), ChatFormatting.YELLOW));
         }
-        body = body.append(separator()).append(labelValue("Scope: ", scope, ChatFormatting.GOLD));
-        body = body.append(separator()).append(labelValue("Triggered by: ", actor, ChatFormatting.GREEN));
+        body = body.append(Messages.separator()).append(Messages.labelValue(ROLLBACK_SCOPE_LABEL_KEY, "Scope: ", Component.literal(scope), ChatFormatting.GOLD));
+        body = body.append(Messages.separator()).append(Messages.labelValue(ROLLBACK_TRIGGER_KEY, "Triggered by: ", Component.literal(actor), ChatFormatting.GREEN));
 
         MutableComponent message = Component.empty().append(header).append(Component.literal("\n")).append(body);
         broadcast(message, Permissions.NOTIFY_WEB_ROLLBACK);
@@ -370,15 +382,15 @@ public final class RollbackWebServer {
         if (server == null || exchange == null) return;
 
         String ip = remoteIp(exchange);
-        MutableComponent header = Component.literal("[GLRA] Web access blocked").withStyle(ChatFormatting.RED, ChatFormatting.BOLD);
+        MutableComponent header = Messages.header(WEB_BROADCAST_BLOCKED_KEY, "Web access blocked", ChatFormatting.RED);
         MutableComponent body = Component.empty()
-                .append(labelValue("IP: ", ip == null ? "unknown" : ip, ChatFormatting.WHITE))
-                .append(separator())
-                .append(labelValue("Path: ", exchange.getRequestURI().getPath(), ChatFormatting.AQUA))
-                .append(separator())
-                .append(labelValue("Method: ", exchange.getRequestMethod(), ChatFormatting.YELLOW))
-                .append(separator())
-                .append(labelValue("Reason: ", reason, ChatFormatting.GOLD));
+                .append(Messages.labelValue(WEB_IP_LABEL_KEY, "IP: ", Component.literal(ip == null ? "unknown" : ip), ChatFormatting.WHITE))
+                .append(Messages.separator())
+                .append(Messages.labelValue(WEB_PATH_LABEL_KEY, "Path: ", Component.literal(exchange.getRequestURI().getPath()), ChatFormatting.AQUA))
+                .append(Messages.separator())
+                .append(Messages.labelValue(WEB_METHOD_LABEL_KEY, "Method: ", Component.literal(exchange.getRequestMethod()), ChatFormatting.YELLOW))
+                .append(Messages.separator())
+                .append(Messages.labelValue(WEB_REASON_LABEL_KEY, "Reason: ", Component.literal(reason), ChatFormatting.GOLD));
 
         MutableComponent message = Component.empty().append(header).append(Component.literal("\n")).append(body);
         broadcast(message, Permissions.NOTIFY_WEB_UNAUTHORIZED);
@@ -558,15 +570,6 @@ public final class RollbackWebServer {
     private String escapeJson(String raw) {
         if (raw == null) return "";
         return raw.replace("\\", "\\\\").replace("\"", "\\\"");
-    }
-
-    private MutableComponent labelValue(String label, String value, ChatFormatting valueColor) {
-        return Component.literal(label).withStyle(ChatFormatting.GRAY)
-                .append(Component.literal(value == null ? "" : value).withStyle(valueColor));
-    }
-
-    private Component separator() {
-        return Component.literal(" | ").withStyle(ChatFormatting.DARK_GRAY);
     }
 
     private Map<String, String> loadTranslations(String langCode) {
