@@ -74,8 +74,9 @@ public final class ActionDAO {
         final List<Action> result = new ArrayList<>();
 
         final StringBuilder sql = new StringBuilder();
-        sql.append("SELECT b.time AS ts, b.user AS user_id, u.name AS player_name, b.level AS level_id, l.name AS level_name, b.x, b.y, b.z, b.type AS material_id, m.name AS material_name, b.action AS action_code ");
+        sql.append("SELECT b.time AS ts, b.user AS user_id, u.name AS player_name, b.level AS level_id, l.name AS level_name, b.x, b.y, b.z, b.type AS material_id, m.name AS material_name, b.action AS action_code, a.name AS action_name ");
         sql.append("FROM blocks b ");
+        sql.append("LEFT JOIN actions a ON a.id = b.action ");
         sql.append("LEFT JOIN materials m ON m.id = b.type ");
         sql.append("LEFT JOIN users u ON u.id = b.user ");
         sql.append("LEFT JOIN levels l ON l.id = b.level ");
@@ -101,8 +102,9 @@ public final class ActionDAO {
                     int materialId = rs.getInt("material_id");
                     String materialName = rs.getString("material_name");
                     int actionCode = rs.getInt("action_code");
+                    String actionName = rs.getString("action_name");
 
-                    result.add(new Action(ts, userId, playerName, levelId, levelName, x, y, z, materialId, materialName, actionCode));
+                    result.add(new Action(ts, userId, playerName, levelId, levelName, x, y, z, materialId, materialName, actionCode, actionName));
                 }
             }
         }
