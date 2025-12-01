@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Audit</title>
+  <link rel="stylesheet" href="/web/rollback.css" />
+</head>
+<body class="page">
+  <div class="container">
+    <div class="header split">
+      <div>
+        <h1>Audit</h1>
+        <p id="subtitle">Live history from the database</p>
+      </div>
+      <div class="action-row">
+        <a class="button secondary" href="/">⟵ Rollback</a>
+        <button id="btn-refresh" type="button">Refresh now</button>
+      </div>
+    </div>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+    <div class="card">
+      <div class="settings-row">
+        <div class="field">
+          <label for="token-input">Token</label>
+          <input type="password" id="token-input" placeholder="Token" autocomplete="current-password" />
+        </div>
+        <div class="field">
+          <label for="limit-input">Max entries per tab</label>
+          <input type="number" id="limit-input" value="100" min="10" max="500" />
+        </div>
+      </div>
+      <div id="status" class="muted"></div>
+      <div class="tabs" role="tablist">
+        <button class="tab active" data-tab="chat" role="tab">Chat</button>
+        <button class="tab" data-tab="blocks" role="tab">Blocks</button>
+        <button class="tab" data-tab="containers" role="tab">Inventory</button>
+      </div>
+      <div id="panel-chat" class="tab-panel active" role="tabpanel"></div>
+      <div id="panel-blocks" class="tab-panel" role="tabpanel"></div>
+      <div id="panel-containers" class="tab-panel" role="tabpanel"></div>
+    </div>
+  </div>
+
+  <script>
+    const panels = {
+      chat: document.getElementById('panel-chat'),
+      blocks: document.getElementById('panel-blocks'),
+      containers: document.getElementById('panel-containers')
+    };
+    const tabs = document.querySelectorAll('.tab');
+    const toast = document.getElementById('toast');
+    const status = document.getElementById('status');
+    const tokenInput = document.getElementById('token-input');
+    const limitInput = document.getElementById('limit-input');
+    const refreshBtn = document.getElementById('btn-refresh');
+
+    let refreshHandle;
+
+    function savedToken() {
+      const fromInput = (tokenInput.value || '').trim();
+      if (fromInput) return fromInput;
+      const stored = localStorage.getItem('glraToken');
+      if (stored) return stored;
+      const viaUrl = new URLSearchParams(location.search).get('token');
+      return viaUrl || '';
+    }
+
+    function applySavedToken() {
+      const token = savedToken();
+      if (token && !tokenInput.value) tokenInput.value = token;
+    }
+
+    function showToast(text, variant = 'info') {
+      if (!text) return;
+      toast.textContent = text;
+      toast.className = `toast ${variant}`;
+      toast.setAttribute('aria-hidden', 'false');
+      clearTimeout(window.__toastTimeout);
+      window.__toastTimeout = setTimeout(() => hideToast(), 6000);
+    }
+
+    function hideToast() {
+      toast.setAttribute('aria-hidden', 'true');
+      toast.className = 'toast';
+    }
+
+    function switchTab(id) {
+      tabs.forEach(tab => tab.classList.toggle('active', tab.dataset.tab === id));
+      Object.entries(panels).forEach(([key, el]) => {
+        el.classList.toggle('active', key === id);
+      });
+    }
+
+    tabs.forEach(tab => tab.addEventListener('click', () => switchTab(tab.dataset.tab)));
+
+    function headers() {
+      const token = savedToken();
+      const h = { 'Accept': 'application/json' };
+      if (token) h['X-Auth-Token'] = token;
+      return h;
+    }
+
+    async function loadMeta() {
+      try {
+        const res = await fetch('/api/audit/meta');
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!data.enabled) {
+          status.textContent = 'Audit dashboard is disabled in the config.';
+          stopAutoRefresh();
+          return false;
+        }
+        tabs.forEach(tab => {
+          const enabled = data[tab.dataset.tab];
+          tab.disabled = !enabled;
+          if (!enabled) {
+            panels[tab.dataset.tab].innerHTML = '<p class="muted">Disabled in config.</p>';
+          }
+        });
+        return true;
+      } catch (err) {
+        console.warn('Audit meta failed', err);
+        return false;
+      }
+    }
+
+    function renderChat(entries) {
+      if (!entries || entries.length === 0) return '<p class="muted">No chat messages found.</p>';
+      return '<ul class="audit-list">' + entries.map(e => {
+        const ts = new Date(e.ts).toLocaleString();
+        const player = e.player || 'Unknown';
+        const msg = e.message || '';
+        return `<li><div class="audit-title">${ts} · ${player}</div><div class="audit-body">${escapeHtml(msg)}</div></li>`;
+      }).join('') + '</ul>';
+    }
+
+    function renderBlocks(entries) {
+      if (!entries || entries.length === 0) return '<p class="muted">No block actions found.</p>';
+      return '<ul class="audit-list">' + entries.map(e => {
+        const ts = new Date(e.ts).toLocaleString();
+        const player = e.player || 'Unknown';
+        const action = blockActionLabel(e.action);
+        const material = e.material || 'unknown';
+        const loc = `${e.level || ''} @ ${e.x},${e.y},${e.z}`;
+        return `<li><div class="audit-title">${ts} · ${player}</div><div class="audit-body">${action} ${material} — ${loc}</div></li>`;
+      }).join('') + '</ul>';
+    }
+
+    function renderContainers(entries) {
+      if (!entries || entries.length === 0) return '<p class="muted">No inventory actions found.</p>';
+      return '<ul class="audit-list">' + entries.map(e => {
+        const ts = new Date(e.ts).toLocaleString();
+        const player = e.player || 'Unknown';
+        const action = containerActionLabel(e.action);
+        const material = e.material || 'unknown';
+        const loc = `${e.level || ''} @ ${e.x},${e.y},${e.z}`;
+        return `<li><div class="audit-title">${ts} · ${player}</div><div class="audit-body">${action} ${e.amount || 0}x ${material} — ${loc}</div></li>`;
+      }).join('') + '</ul>';
+    }
+
+    function blockActionLabel(code) {
+      switch (code) {
+        case 0: return 'Break';
+        case 1: return 'Place';
+        default: return 'Change';
+      }
+    }
+
+    function containerActionLabel(code) {
+      switch (code) {
+        case 1: return 'Add to container';
+        case 0: return 'Remove from container';
+        default: return 'Change container';
+      }
+    }
+
+    function escapeHtml(text) {
+      const map = {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"};
+      return (text || '').replace(/[&<>"']/g, c => map[c] || c);
+    }
+
+    async function loadAudit() {
+      const limit = Math.min(Math.max(parseInt(limitInput.value || '100'), 10), 500);
+      limitInput.value = limit;
+      try {
+        const res = await fetch('/api/audit?limit=' + limit, { headers: headers() });
+        if (!res.ok) {
+          status.textContent = res.status === 401 ? 'Unauthorized: provide a valid token.' : 'Failed to load audit data.';
+          showToast(status.textContent, 'error');
+          return;
+        }
+        const data = await res.json();
+        if (!data.enabled) {
+          status.textContent = 'Audit dashboard is disabled in the config.';
+          stopAutoRefresh();
+          return;
+        }
+        if (data.chatEnabled) panels.chat.innerHTML = renderChat(data.chat || []); else panels.chat.innerHTML = '<p class="muted">Disabled in config.</p>';
+        if (data.blockEnabled) panels.blocks.innerHTML = renderBlocks(data.blocks || []); else panels.blocks.innerHTML = '<p class="muted">Disabled in config.</p>';
+        if (data.containerEnabled) panels.containers.innerHTML = renderContainers(data.containers || []); else panels.containers.innerHTML = '<p class="muted">Disabled in config.</p>';
+        status.textContent = 'Last updated at ' + new Date().toLocaleTimeString();
+      } catch (err) {
+        status.textContent = 'Error: ' + err;
+        showToast('Error while loading audit data', 'error');
+      }
+    }
+
+    function startAutoRefresh() {
+      stopAutoRefresh();
+      refreshHandle = setInterval(loadAudit, 10000);
+    }
+
+    function stopAutoRefresh() {
+      if (refreshHandle) {
+        clearInterval(refreshHandle);
+        refreshHandle = null;
+      }
+    }
+
+    refreshBtn.addEventListener('click', () => {
+      loadAudit();
+    });
+
+    tokenInput.addEventListener('change', () => {
+      const value = (tokenInput.value || '').trim();
+      if (value) localStorage.setItem('glraToken', value); else localStorage.removeItem('glraToken');
+    });
+
+    applySavedToken();
+    loadMeta().then(enabled => {
+      if (enabled) {
+        loadAudit();
+        startAutoRefresh();
+      }
+    });
+  </script>
+</body>
+</html>
