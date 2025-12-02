@@ -30,6 +30,15 @@
           <label for="limit-input">Max entries per tab</label>
           <input type="number" id="limit-input" value="100" min="10" max="500" />
         </div>
+        <div class="field">
+          <label for="auto-interval">Auto refresh (s)</label>
+          <div class="split">
+            <input type="number" id="auto-interval" value="10" min="3" max="300" />
+            <label class="checkbox">
+              <input type="checkbox" id="auto-toggle" checked /> enable
+            </label>
+          </div>
+        </div>
       </div>
       <div id="status" class="muted"></div>
       <div class="tabs" role="tablist">
@@ -54,6 +63,8 @@
     const status = document.getElementById('status');
     const tokenInput = document.getElementById('token-input');
     const limitInput = document.getElementById('limit-input');
+    const autoIntervalInput = document.getElementById('auto-interval');
+    const autoToggle = document.getElementById('auto-toggle');
     const refreshBtn = document.getElementById('btn-refresh');
 
     let refreshHandle;
@@ -102,6 +113,18 @@
       return h;
     }
 
+    function loadAutoSettings() {
+      const storedInterval = parseInt(localStorage.getItem('glraAuditInterval') || '10');
+      if (!Number.isNaN(storedInterval)) autoIntervalInput.value = storedInterval;
+      const storedToggle = localStorage.getItem('glraAuditAuto');
+      if (storedToggle !== null) autoToggle.checked = storedToggle === 'true';
+    }
+
+    function saveAutoSettings() {
+      localStorage.setItem('glraAuditInterval', autoIntervalInput.value);
+      localStorage.setItem('glraAuditAuto', autoToggle.checked ? 'true' : 'false');
+    }
+
     async function loadMeta() {
       try {
         const res = await fetch('/api/audit/meta');
@@ -127,37 +150,61 @@
     }
 
     function renderChat(entries) {
-      if (!entries || entries.length === 0) return '<p class="muted">No chat messages found.</p>';
-      return '<ul class="audit-list">' + entries.map(e => {
-        const ts = new Date(e.ts).toLocaleString();
-        const player = e.player || 'Unknown';
-        const msg = e.message || '';
-        return `<li><div class="audit-title">${ts} · ${player}</div><div class="audit-body">${escapeHtml(msg)}</div></li>`;
-      }).join('') + '</ul>';
+      return renderTable(entries, [
+        { label: 'Time', render: e => formatTs(e.ts) },
+        { label: 'Player', render: e => escapeHtml(e.player || 'Unknown') },
+        { label: 'Message', render: e => escapeHtml(e.message || '') }
+      ], 'No chat messages found.');
     }
 
     function renderBlocks(entries) {
-      if (!entries || entries.length === 0) return '<p class="muted">No block actions found.</p>';
-      return '<ul class="audit-list">' + entries.map(e => {
-        const ts = new Date(e.ts).toLocaleString();
-        const player = e.player || 'Unknown';
-        const action = blockActionLabel(e.action);
-        const material = e.material || 'unknown';
-        const loc = `${e.level || ''} @ ${e.x},${e.y},${e.z}`;
-        return `<li><div class="audit-title">${ts} · ${player}</div><div class="audit-body">${action} ${material} — ${loc}</div></li>`;
-      }).join('') + '</ul>';
+      return renderTable(entries, [
+        { label: 'Time', render: e => formatTs(e.ts) },
+        { label: 'Player', render: e => escapeHtml(e.player || 'Unknown') },
+        { label: 'Action', render: e => `<span class="pill ${blockPillClass(e.action)}">${blockActionLabel(e.action)}</span>` },
+        { label: 'Block', render: e => escapeHtml(e.material || 'unknown') },
+        { label: 'Location', render: e => `<span class="mono">${escapeHtml(e.level || '')} @ ${e.x},${e.y},${e.z}</span>` }
+      ], 'No block actions found.');
     }
 
     function renderContainers(entries) {
-      if (!entries || entries.length === 0) return '<p class="muted">No inventory actions found.</p>';
-      return '<ul class="audit-list">' + entries.map(e => {
-        const ts = new Date(e.ts).toLocaleString();
-        const player = e.player || 'Unknown';
-        const action = containerActionLabel(e.action);
-        const material = e.material || 'unknown';
-        const loc = `${e.level || ''} @ ${e.x},${e.y},${e.z}`;
-        return `<li><div class="audit-title">${ts} · ${player}</div><div class="audit-body">${action} ${e.amount || 0}x ${material} — ${loc}</div></li>`;
-      }).join('') + '</ul>';
+      return renderTable(entries, [
+        { label: 'Time', render: e => formatTs(e.ts) },
+        { label: 'Player', render: e => escapeHtml(e.player || 'Unknown') },
+        { label: 'Action', render: e => `<span class="pill ${containerPillClass(e.action)}">${containerActionLabel(e.action)}</span>` },
+        { label: 'Item', render: e => `${e.amount || 0}x ${escapeHtml(e.material || 'unknown')}` },
+        { label: 'Location', render: e => `<span class="mono">${escapeHtml(e.level || '')} @ ${e.x},${e.y},${e.z}</span>` }
+      ], 'No inventory actions found.');
+    }
+
+    function renderTable(entries, columns, emptyText) {
+      if (!entries || entries.length === 0) return `<p class="muted">${emptyText}</p>`;
+      let header = columns.map(c => `<th>${escapeHtml(c.label)}</th>`).join('');
+      let rows = entries.map(e => {
+        const cells = columns.map(c => `<td>${c.render(e)}</td>`).join('');
+        return `<tr>${cells}</tr>`;
+      }).join('');
+      return `<table class="audit-table"><thead><tr>${header}</tr></thead><tbody>${rows}</tbody></table>`;
+    }
+
+    function formatTs(ts) {
+      return new Date(ts).toLocaleString();
+    }
+
+    function blockPillClass(code) {
+      switch (code) {
+        case 0: return 'warning';
+        case 1: return 'success';
+        default: return 'neutral';
+      }
+    }
+
+    function containerPillClass(code) {
+      switch (code) {
+        case 1: return 'success';
+        case 0: return 'warning';
+        default: return 'neutral';
+      }
     }
 
     function blockActionLabel(code) {
@@ -184,6 +231,7 @@
     async function loadAudit() {
       const limit = Math.min(Math.max(parseInt(limitInput.value || '100'), 10), 500);
       limitInput.value = limit;
+      saveAutoSettings();
       try {
         const res = await fetch('/api/audit?limit=' + limit, { headers: headers() });
         if (!res.ok) {
@@ -207,9 +255,16 @@
       }
     }
 
+    function autoIntervalMs() {
+      const seconds = Math.min(Math.max(parseInt(autoIntervalInput.value || '10'), 3), 300);
+      autoIntervalInput.value = seconds;
+      return seconds * 1000;
+    }
+
     function startAutoRefresh() {
       stopAutoRefresh();
-      refreshHandle = setInterval(loadAudit, 10000);
+      if (!autoToggle.checked) return;
+      refreshHandle = setInterval(loadAudit, autoIntervalMs());
     }
 
     function stopAutoRefresh() {
@@ -228,7 +283,23 @@
       if (value) localStorage.setItem('glraToken', value); else localStorage.removeItem('glraToken');
     });
 
+    autoToggle.addEventListener('change', () => {
+      saveAutoSettings();
+      if (autoToggle.checked) {
+        loadAudit();
+        startAutoRefresh();
+      } else {
+        stopAutoRefresh();
+      }
+    });
+
+    autoIntervalInput.addEventListener('change', () => {
+      saveAutoSettings();
+      startAutoRefresh();
+    });
+
     applySavedToken();
+    loadAutoSettings();
     loadMeta().then(enabled => {
       if (enabled) {
         loadAudit();
@@ -238,3 +309,4 @@
   </script>
 </body>
 </html>
+

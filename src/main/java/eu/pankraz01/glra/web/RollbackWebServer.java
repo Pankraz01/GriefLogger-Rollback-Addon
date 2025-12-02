@@ -201,7 +201,7 @@ public final class RollbackWebServer {
             return;
         }
 
-        AuthResult auth = authorize(exchange, FormData.empty(), false);
+        AuthResult auth = authorize(exchange, FormData.empty());
         if (!auth.allowed()) {
             sendJson(exchange, 401, "{\"status\":\"error\",\"message\":\"Unauthorized\"}");
             return;

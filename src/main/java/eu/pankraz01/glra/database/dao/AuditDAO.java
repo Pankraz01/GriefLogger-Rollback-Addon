@@ -25,11 +25,9 @@ public final class AuditDAO {
         List<ChatEntry> result = new ArrayList<>();
         SQLException lastError = null;
 
-        // GriefLogger chat schemas are not officially documented; try a few sensible defaults.
+        // Test data: table `chats` with column `message`
         List<String> candidates = List.of(
-                "SELECT c.time AS ts, u.name AS player_name, c.message AS msg FROM chat c LEFT JOIN users u ON u.id = c.user ORDER BY c.time DESC LIMIT ?",
-                "SELECT c.time AS ts, u.name AS player_name, c.msg AS msg FROM chat c LEFT JOIN users u ON u.id = c.user ORDER BY c.time DESC LIMIT ?",
-                "SELECT c.time AS ts, u.name AS player_name, c.message AS msg FROM chatlog c LEFT JOIN users u ON u.id = c.user ORDER BY c.time DESC LIMIT ?"
+                "SELECT c.time AS ts, u.name AS player_name, c.message AS msg FROM chats c LEFT JOIN users u ON u.id = c.user ORDER BY c.time DESC LIMIT ?"
         );
 
         for (String sql : candidates) {

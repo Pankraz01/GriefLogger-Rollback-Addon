@@ -24,8 +24,9 @@
 
         <div class="field">
           <label id="lbl-player">Player</label>
-          <input type="text" name="player" id="player-input" placeholder="Player123" list="player-list" />
-          <datalist id="player-list"></datalist>
+          <select name="player" id="player-select">
+            <option value="">Any player</option>
+          </select>
         </div>
 
         <div class="checkboxes">
@@ -62,8 +63,9 @@
           </div>
           <div class="field grow">
             <label id="lbl-dimension">Dimension</label>
-            <input type="text" name="dimension" id="dimension-input" placeholder="minecraft:overworld" list="dimension-list" />
-            <datalist id="dimension-list"></datalist>
+            <select name="dimension" id="dimension-select">
+              <option value="">Any dimension</option>
+            </select>
           </div>
         </div>
 
@@ -82,10 +84,8 @@
     const form = document.getElementById('rollback-form');
     const result = document.getElementById('result');
     const toast = document.getElementById('toast');
-    const playerInput = document.getElementById('player-input');
-    const playerList = document.getElementById('player-list');
-    const dimensionInput = document.getElementById('dimension-input');
-    const dimensionList = document.getElementById('dimension-list');
+    const playerSelect = document.getElementById('player-select');
+    const dimensionSelect = document.getElementById('dimension-select');
     const auditLinkWrapper = document.getElementById('audit-link-wrapper');
     const auditLink = document.getElementById('audit-link');
     const labels = {
@@ -224,12 +224,21 @@
         if (!res.ok) return;
         const data = await res.json();
         if (!data.players) return;
-        playerList.innerHTML = '';
+        const current = playerSelect.value;
+        playerSelect.innerHTML = '';
+        const anyOpt = document.createElement('option');
+        anyOpt.value = '';
+        anyOpt.textContent = t('playerAny', 'Any player');
+        playerSelect.appendChild(anyOpt);
         data.players.forEach(name => {
           const opt = document.createElement('option');
           opt.value = name;
-          playerList.appendChild(opt);
+          opt.textContent = name;
+          playerSelect.appendChild(opt);
         });
+        if (current && data.players.includes(current)) {
+          playerSelect.value = current;
+        }
       } catch (err) {
         console.warn('Player fetch failed', err);
       }
@@ -241,12 +250,21 @@
         if (!res.ok) return;
         const data = await res.json();
         if (!data.dimensions) return;
-        dimensionList.innerHTML = '';
+        const current = dimensionSelect.value;
+        dimensionSelect.innerHTML = '';
+        const anyOpt = document.createElement('option');
+        anyOpt.value = '';
+        anyOpt.textContent = t('dimensionAny', 'Any dimension');
+        dimensionSelect.appendChild(anyOpt);
         data.dimensions.forEach(dim => {
           const opt = document.createElement('option');
           opt.value = dim;
-          dimensionList.appendChild(opt);
+          opt.textContent = dim;
+          dimensionSelect.appendChild(opt);
         });
+        if (current && data.dimensions.includes(current)) {
+          dimensionSelect.value = current;
+        }
       } catch (err) {
         console.warn('Dimension fetch failed', err);
       }
@@ -274,6 +292,10 @@
         labels.submit.textContent = t('submit', labels.submit.textContent);
         labels.radiusUnit.querySelector('option[value="blocks"]').textContent = t('radiusUnit.blocks', 'Blocks');
         labels.radiusUnit.querySelector('option[value="chunks"]').textContent = t('radiusUnit.chunks', 'Chunks');
+        const playerAny = t('playerAny', 'Any player');
+        const dimAny = t('dimensionAny', 'Any dimension');
+        if (playerSelect.options.length > 0) playerSelect.options[0].textContent = playerAny;
+        if (dimensionSelect.options.length > 0) dimensionSelect.options[0].textContent = dimAny;
         result.textContent = '';
       } catch (err) {
         console.warn('Lang fetch failed', err);
