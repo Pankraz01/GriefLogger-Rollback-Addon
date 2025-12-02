@@ -80,6 +80,80 @@ public final class RollbackActionLogDAO {
         return result;
     }
 
+    /**
+     * Load recent rollback actions across all jobs, newest first.
+     */
+    public List<LoggedRollbackAction> loadRecentActions(int limit) throws SQLException {
+        List<LoggedRollbackAction> result = new ArrayList<>();
+        StringBuilder sql = new StringBuilder();
+        sql.append("SELECT id, job_id, ts, type, level_name, x, y, z, material, old_material, amount, item_data, action_type ");
+        sql.append("FROM glra_rollback_actions ORDER BY ts DESC LIMIT ?");
+
+        try (Connection conn = DBConnection.getConnection(); PreparedStatement ps = conn.prepareStatement(sql.toString())) {
+            ps.setInt(1, Math.max(1, limit));
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    result.add(new LoggedRollbackAction(
+                            rs.getLong("id"),
+                            rs.getLong("job_id"),
+                            rs.getLong("ts"),
+                            rs.getString("type"),
+                            rs.getString("level_name"),
+                            rs.getInt("x"),
+                            rs.getInt("y"),
+                            rs.getInt("z"),
+                            rs.getString("material"),
+                            rs.getString("old_material"),
+                            rs.getInt("amount"),
+                            rs.getString("item_data"),
+                            rs.getInt("action_type")
+                    ));
+                }
+            }
+        }
+        return result;
+    }
+
+    /**
+     * Load specific rollback actions by their ids, newest first.
+     */
+    public List<LoggedRollbackAction> loadActionsByIds(List<Long> ids) throws SQLException {
+        if (ids == null || ids.isEmpty()) return List.of();
+
+        StringBuilder sql = new StringBuilder("SELECT id, job_id, ts, type, level_name, x, y, z, material, old_material, amount, item_data, action_type ");
+        sql.append("FROM glra_rollback_actions WHERE id IN (");
+        sql.append(String.join(",", Collections.nCopies(ids.size(), "?")));
+        sql.append(") ORDER BY ts DESC");
+
+        List<LoggedRollbackAction> result = new ArrayList<>();
+        try (Connection conn = DBConnection.getConnection(); PreparedStatement ps = conn.prepareStatement(sql.toString())) {
+            int idx = 1;
+            for (Long id : ids) {
+                ps.setLong(idx++, id);
+            }
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    result.add(new LoggedRollbackAction(
+                            rs.getLong("id"),
+                            rs.getLong("job_id"),
+                            rs.getLong("ts"),
+                            rs.getString("type"),
+                            rs.getString("level_name"),
+                            rs.getInt("x"),
+                            rs.getInt("y"),
+                            rs.getInt("z"),
+                            rs.getString("material"),
+                            rs.getString("old_material"),
+                            rs.getInt("amount"),
+                            rs.getString("item_data"),
+                            rs.getInt("action_type")
+                    ));
+                }
+            }
+        }
+        return result;
+    }
+
     private void log(long jobId, String type, String levelName, int x, int y, int z, String material, String oldMaterial, int actionType, int amount, String itemData) {
         long now = System.currentTimeMillis();
         long id = now;

@@ -478,7 +478,7 @@ public class RollbackManager {
         }
 
         Block target = switch (action.kind()) {
-            case BREAK -> blockFromName(action.materialName); // undo a break by restoring the broken block
+            case BREAK -> blockFromName(action.oldMaterialName); // restore what was there before the break/fire
             case PLACE -> blockFromName(action.oldMaterialName); // undo a placement by restoring the previous block
             default -> blockFromName(action.oldMaterialName);
         };

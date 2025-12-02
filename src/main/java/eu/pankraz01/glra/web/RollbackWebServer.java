@@ -7,10 +7,13 @@ import java.net.InetSocketAddress;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.sql.SQLException;
 
 import com.sun.net.httpserver.Headers;
 import com.sun.net.httpserver.HttpExchange;
@@ -93,6 +96,8 @@ public final class RollbackWebServer {
         httpServer.createContext("/api/rollback", this::handleRollback);
         httpServer.createContext("/api/audit", this::handleAuditData);
         httpServer.createContext("/api/audit/meta", this::handleAuditMeta);
+        httpServer.createContext("/api/audit/undo", this::handleAuditUndo);
+        httpServer.createContext("/api/audit/rollback", this::handleAuditRollback);
         httpServer.createContext("/api/players", this::handlePlayers);
         httpServer.createContext("/api/dimensions", this::handleDimensions);
         httpServer.createContext("/api/lang", this::handleLang);
@@ -186,6 +191,8 @@ public final class RollbackWebServer {
                 .append(",\"chat\":").append(enabled && Config.WEB_AUDIT_CHAT_ENABLED.get())
                 .append(",\"blocks\":").append(enabled && Config.WEB_AUDIT_BLOCKS_ENABLED.get())
                 .append(",\"containers\":").append(enabled && Config.WEB_AUDIT_CONTAINERS_ENABLED.get())
+                .append(",\"rollback-actions\":").append(enabled) // expose rollback actions tab
+                .append(",\"history\":").append(enabled) // history is always available when audit is enabled
                 .append('}')
                 .toString();
         sendJson(exchange, 200, json);
@@ -207,11 +214,15 @@ public final class RollbackWebServer {
             return;
         }
 
-        int limit = parseLimit(exchange.getRequestURI().getRawQuery(), 100);
+        String rawQuery = exchange.getRequestURI().getRawQuery();
+        int limit = parseLimit(rawQuery, 100);
+        AuditFilters filters = parseAuditFilters(rawQuery);
 
         boolean chatEnabled = Config.WEB_AUDIT_CHAT_ENABLED.get();
         boolean blocksEnabled = Config.WEB_AUDIT_BLOCKS_ENABLED.get();
         boolean containersEnabled = Config.WEB_AUDIT_CONTAINERS_ENABLED.get();
+        boolean historyEnabled = true;
+        boolean rollbackActionsEnabled = true;
 
         StringBuilder json = new StringBuilder();
         json.append('{');
@@ -220,19 +231,29 @@ public final class RollbackWebServer {
         json.append(",\"chatEnabled\":").append(chatEnabled);
         json.append(",\"blockEnabled\":").append(blocksEnabled);
         json.append(",\"containerEnabled\":").append(containersEnabled);
+        json.append(",\"rollbackActionsEnabled\":").append(rollbackActionsEnabled);
+        json.append(",\"historyEnabled\":").append(historyEnabled);
 
         try {
             if (chatEnabled) {
-                var chat = auditDAO.loadRecentChat(limit);
+                var chat = auditDAO.loadRecentChat(limit, filters.player());
                 json.append(",\"chat\":").append(toChatJson(chat));
             }
             if (blocksEnabled) {
-                var blocks = auditDAO.loadRecentBlocks(limit);
+                var blocks = auditDAO.loadRecentBlocks(limit, filters.player(), filters.dimension(), filters.blockAction());
                 json.append(",\"blocks\":").append(toBlockJson(blocks));
             }
             if (containersEnabled) {
-                var containers = auditDAO.loadRecentContainers(limit);
+                var containers = auditDAO.loadRecentContainers(limit, filters.player(), filters.dimension(), filters.containerAction());
                 json.append(",\"containers\":").append(toContainerJson(containers));
+            }
+            if (historyEnabled) {
+                var history = historyDAO.loadRecent(limit, filters.player());
+                json.append(",\"history\":").append(toHistoryJson(history));
+            }
+            if (rollbackActionsEnabled) {
+                var rollbackActions = actionLogDAO.loadRecentActions(limit);
+                json.append(",\"rollbackActions\":").append(toRollbackActionsJson(rollbackActions));
             }
         } catch (Exception e) {
             LOGGER.error("Failed to load audit data", e);
@@ -242,6 +263,81 @@ public final class RollbackWebServer {
 
         json.append('}');
         sendJson(exchange, 200, json.toString());
+    }
+
+    private void handleAuditUndo(HttpExchange exchange) throws IOException {
+        if (!Config.WEB_AUDIT_ENABLED.get()) {
+            sendJson(exchange, 404, "{\"status\":\"error\",\"message\":\"Audit disabled\"}");
+            return;
+        }
+        if (!"POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+            sendJson(exchange, 405, "{\"status\":\"error\",\"message\":\"Use POST\"}");
+            return;
+        }
+
+        AuthResult auth = authorize(exchange, FormData.empty());
+        if (!auth.allowed()) {
+            sendJson(exchange, 401, "{\"status\":\"error\",\"message\":\"Unauthorized\"}");
+            return;
+        }
+
+        String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+        List<Long> ids = parseIdListFromJson(body, "actionIds");
+        if (ids.isEmpty()) {
+            sendJson(exchange, 400, "{\"status\":\"error\",\"message\":\"No action ids provided\"}");
+            return;
+        }
+
+        try {
+            var actions = actionLogDAO.loadActionsByIds(ids);
+            if (actions.isEmpty()) {
+                sendJson(exchange, 404, "{\"status\":\"error\",\"message\":\"No rollback actions found for ids\"}");
+                return;
+            }
+            rollbackManager.startUndo(actions, "web undo selected");
+            sendJson(exchange, 200, "{\"status\":\"ok\",\"message\":\"Undo started\",\"count\":" + actions.size() + "}");
+        } catch (Exception e) {
+            LOGGER.error("Failed to start undo from audit", e);
+            sendJson(exchange, 500, "{\"status\":\"error\",\"message\":\"Could not start undo\"}");
+        }
+    }
+
+    private void handleAuditRollback(HttpExchange exchange) throws IOException {
+        if (!Config.WEB_AUDIT_ENABLED.get()) {
+            sendJson(exchange, 404, "{\"status\":\"error\",\"message\":\"Audit disabled\"}");
+            return;
+        }
+        if (!"POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+            sendJson(exchange, 405, "{\"status\":\"error\",\"message\":\"Use POST\"}");
+            return;
+        }
+
+        AuthResult auth = authorize(exchange, FormData.empty());
+        if (!auth.allowed()) {
+            sendJson(exchange, 401, "{\"status\":\"error\",\"message\":\"Unauthorized\"}");
+            return;
+        }
+
+        String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+        List<RollbackRequestEntry> entries = parseRollbackEntries(body);
+        if (entries.isEmpty()) {
+            sendJson(exchange, 400, "{\"status\":\"error\",\"message\":\"No entries provided\"}");
+            return;
+        }
+
+        try {
+            for (RollbackRequestEntry entry : entries) {
+                switch (entry.type) {
+                    case BLOCK -> triggerBlockRollback(entry, auth);
+                    case CONTAINER -> triggerContainerRollback(entry, auth);
+                    case HISTORY -> triggerHistoryUndo(entry);
+                }
+            }
+            sendJson(exchange, 200, "{\"status\":\"ok\",\"message\":\"Rollback started\",\"count\":" + entries.size() + "}");
+        } catch (Exception e) {
+            LOGGER.error("Failed to start rollback from audit", e);
+            sendJson(exchange, 500, "{\"status\":\"error\",\"message\":\"Could not start rollback\"}");
+        }
     }
 
     private void handleAuditPage(HttpExchange exchange) throws IOException {
@@ -646,6 +742,7 @@ public final class RollbackWebServer {
                     .append(",\"z\":").append(entry.z())
                     .append(",\"material\":\"").append(escapeJson(entry.materialName())).append("\"")
                     .append(",\"action\":").append(entry.actionCode())
+                    .append(",\"actionLabel\":\"").append(escapeJson(entry.actionLabel())).append("\"")
                     .append('}');
             first = false;
         }
@@ -676,6 +773,55 @@ public final class RollbackWebServer {
         return sb.toString();
     }
 
+    private String toHistoryJson(Iterable<RollbackHistoryDAO.HistoryEntry> history) {
+        StringBuilder sb = new StringBuilder();
+        sb.append('[');
+        boolean first = true;
+        for (var entry : history) {
+            if (!first) sb.append(',');
+            sb.append('{')
+                    .append("\"id\":").append(entry.id())
+                    .append(",\"ts\":").append(entry.ts())
+                    .append(",\"actor\":\"").append(escapeJson(entry.actorName())).append("\"")
+                    .append(",\"source\":\"").append(escapeJson(entry.source())).append("\"")
+                    .append(",\"time\":\"").append(escapeJson(entry.timeLabel())).append("\"")
+                    .append(",\"durationMs\":").append(entry.durationMs())
+                    .append(",\"player\":\"").append(escapeJson(entry.player())).append("\"")
+                    .append(",\"radius\":\"").append(escapeJson(entry.radius())).append("\"")
+                    .append(",\"scope\":\"").append(escapeJson(entry.scope())).append("\"")
+                    .append('}');
+            first = false;
+        }
+        sb.append(']');
+        return sb.toString();
+    }
+
+    private String toRollbackActionsJson(Iterable<RollbackActionLogDAO.LoggedRollbackAction> actions) {
+        StringBuilder sb = new StringBuilder();
+        sb.append('[');
+        boolean first = true;
+        for (var entry : actions) {
+            if (!first) sb.append(',');
+            sb.append('{')
+                    .append("\"id\":").append(entry.id())
+                    .append(",\"jobId\":").append(entry.jobId())
+                    .append(",\"ts\":").append(entry.ts())
+                    .append(",\"type\":\"").append(escapeJson(entry.type())).append("\"")
+                    .append(",\"level\":\"").append(escapeJson(entry.levelName())).append("\"")
+                    .append(",\"x\":").append(entry.x())
+                    .append(",\"y\":").append(entry.y())
+                    .append(",\"z\":").append(entry.z())
+                    .append(",\"material\":\"").append(escapeJson(entry.material())).append("\"")
+                    .append(",\"oldMaterial\":\"").append(escapeJson(entry.oldMaterial())).append("\"")
+                    .append(",\"amount\":").append(entry.amount())
+                    .append(",\"actionType\":").append(entry.actionType())
+                    .append('}');
+            first = false;
+        }
+        sb.append(']');
+        return sb.toString();
+    }
+
     private int parseLimit(String rawQuery, int def) {
         if (rawQuery == null || rawQuery.isEmpty()) return def;
         for (String param : rawQuery.split("&")) {
@@ -687,6 +833,133 @@ public final class RollbackWebServer {
             }
         }
         return def;
+    }
+
+    private AuditFilters parseAuditFilters(String rawQuery) {
+        Map<String, String> params = parseQueryParams(rawQuery);
+        Optional<String> player = Optional.ofNullable(trimToNull(params.get("player")));
+        Optional<String> dimension = Optional.ofNullable(trimToNull(params.get("dimension"))).flatMap(this::validateDimensionName);
+        Optional<Integer> blockAction = parseOptionalIntParam(params.get("blockAction"));
+        Optional<Integer> containerAction = parseOptionalIntParam(params.get("containerAction"));
+        return new AuditFilters(player, dimension, blockAction, containerAction);
+    }
+
+    private Optional<Integer> parseOptionalIntParam(String raw) {
+        if (raw == null || raw.isBlank()) return Optional.empty();
+        try {
+            return Optional.of(Integer.parseInt(raw.trim()));
+        } catch (NumberFormatException e) {
+            return Optional.empty();
+        }
+    }
+
+    private List<Long> parseIdListFromJson(String json, String field) {
+        if (json == null || json.isBlank()) return List.of();
+        try {
+            var obj = com.google.gson.JsonParser.parseString(json).getAsJsonObject();
+            if (!obj.has(field) || !obj.get(field).isJsonArray()) return List.of();
+            List<Long> ids = new ArrayList<>();
+            for (var el : obj.get(field).getAsJsonArray()) {
+                try {
+                    ids.add(el.getAsLong());
+                } catch (Exception ignored) {
+                }
+            }
+            return ids;
+        } catch (Exception e) {
+            LOGGER.warn("Could not parse id list from json body", e);
+            return List.of();
+        }
+    }
+
+    private List<RollbackRequestEntry> parseRollbackEntries(String json) {
+        if (json == null || json.isBlank()) return List.of();
+        try {
+            var obj = com.google.gson.JsonParser.parseString(json).getAsJsonObject();
+            if (!obj.has("entries") || !obj.get("entries").isJsonArray()) return List.of();
+            List<RollbackRequestEntry> result = new ArrayList<>();
+            for (var el : obj.get("entries").getAsJsonArray()) {
+                try {
+                    var e = el.getAsJsonObject();
+                    String type = e.get("type").getAsString();
+                    long ts = e.has("ts") ? e.get("ts").getAsLong() : 0L;
+                    String player = e.has("player") ? trimToNull(e.get("player").getAsString()) : null;
+                    String level = e.has("level") ? trimToNull(e.get("level").getAsString()) : null;
+                    int x = e.has("x") ? e.get("x").getAsInt() : Integer.MIN_VALUE;
+                    int y = e.has("y") ? e.get("y").getAsInt() : Integer.MIN_VALUE;
+                    int z = e.has("z") ? e.get("z").getAsInt() : Integer.MIN_VALUE;
+                    long jobId = e.has("jobId") ? e.get("jobId").getAsLong() : -1L;
+                    RollbackEntryType entryType = RollbackEntryType.from(type);
+                    if (entryType != null) {
+                        result.add(new RollbackRequestEntry(entryType, ts, player, level, x, y, z, jobId));
+                    }
+                } catch (Exception ignored) {
+                }
+            }
+            return result;
+        } catch (Exception e) {
+            LOGGER.warn("Could not parse rollback entries from json body", e);
+            return List.of();
+        }
+    }
+
+    private Optional<String> validateDimensionName(String raw) {
+        try {
+            return Optional.of(ResourceLocation.parse(raw.trim()).toString());
+        } catch (Exception e) {
+            return Optional.empty();
+        }
+    }
+
+    private void triggerBlockRollback(RollbackRequestEntry entry, AuthResult auth) {
+        if (entry.level == null || entry.x == Integer.MIN_VALUE || entry.z == Integer.MIN_VALUE) return;
+        ResourceKey<Level> levelKey = parseDimension(entry.level);
+        BlockPos center = new BlockPos(entry.x, entry.y == Integer.MIN_VALUE ? 64 : entry.y, entry.z);
+        RollbackManager.RollbackArea area = new RollbackManager.RollbackArea(levelKey, center, 0);
+        Optional<String> player = Optional.ofNullable(entry.player);
+        long durationMs = 0L;
+        long historyId = historyDAO.recordAndReturnId(auth.userId().orElse(null), auth.username().orElse("web"), "audit", "point", durationMs, player, Optional.of("point"), RollbackManager.RollbackKind.BLOCKS_ONLY);
+        notifyRollbackStarted(auth, "point", player, new RadiusResult(Optional.of(area), Optional.of("point"), null), RollbackManager.RollbackKind.BLOCKS_ONLY);
+        rollbackManager.startRollback(entry.ts, "single action", player, Optional.of(area), Optional.of("1b"), RollbackManager.RollbackKind.BLOCKS_ONLY, historyId);
+    }
+
+    private void triggerContainerRollback(RollbackRequestEntry entry, AuthResult auth) {
+        if (entry.level == null || entry.x == Integer.MIN_VALUE || entry.z == Integer.MIN_VALUE) return;
+        ResourceKey<Level> levelKey = parseDimension(entry.level);
+        BlockPos center = new BlockPos(entry.x, entry.y == Integer.MIN_VALUE ? 64 : entry.y, entry.z);
+        RollbackManager.RollbackArea area = new RollbackManager.RollbackArea(levelKey, center, 0);
+        Optional<String> player = Optional.ofNullable(entry.player);
+        long durationMs = 0L;
+        long historyId = historyDAO.recordAndReturnId(auth.userId().orElse(null), auth.username().orElse("web"), "audit", "point", durationMs, player, Optional.of("point"), RollbackManager.RollbackKind.ITEMS_ONLY);
+        notifyRollbackStarted(auth, "point", player, new RadiusResult(Optional.of(area), Optional.of("point"), null), RollbackManager.RollbackKind.ITEMS_ONLY);
+        rollbackManager.startRollback(entry.ts, "single action", player, Optional.of(area), Optional.of("1b"), RollbackManager.RollbackKind.ITEMS_ONLY, historyId);
+    }
+
+    private void triggerHistoryUndo(RollbackRequestEntry entry) throws SQLException {
+        if (entry.jobId <= 0) return;
+        List<Long> ids = List.of(entry.jobId);
+        var actions = actionLogDAO.loadActionsForJobs(ids);
+        if (actions.isEmpty()) return;
+        rollbackManager.startUndo(actions, "undo history " + entry.jobId);
+    }
+
+    private Map<String, String> parseQueryParams(String rawQuery) {
+        Map<String, String> result = new HashMap<>();
+        if (rawQuery == null || rawQuery.isEmpty()) return result;
+        for (String pair : rawQuery.split("&")) {
+            if (pair.isEmpty()) continue;
+            int eq = pair.indexOf('=');
+            String key = eq >= 0 ? pair.substring(0, eq) : pair;
+            String value = eq >= 0 ? pair.substring(eq + 1) : "";
+            key = urlDecode(key);
+            value = urlDecode(value);
+            result.put(key, value);
+        }
+        return result;
+    }
+
+    private String urlDecode(String value) {
+        return URLDecoder.decode(value, StandardCharsets.UTF_8);
     }
 
     private String loadHtml(String resourcePath) {
@@ -817,8 +1090,26 @@ public final class RollbackWebServer {
         }
     }
 
+    private record AuditFilters(Optional<String> player, Optional<String> dimension, Optional<Integer> blockAction, Optional<Integer> containerAction) {
+    }
+
     private record AuthResult(boolean allowed, Optional<Integer> userId, Optional<String> username) {
     }
+
+    private enum RollbackEntryType {
+        BLOCK, CONTAINER, HISTORY;
+        static RollbackEntryType from(String raw) {
+            if (raw == null) return null;
+            return switch (raw.toLowerCase()) {
+                case "block" -> BLOCK;
+                case "container" -> CONTAINER;
+                case "history" -> HISTORY;
+                default -> null;
+            };
+        }
+    }
+
+    private record RollbackRequestEntry(RollbackEntryType type, long ts, String player, String level, int x, int y, int z, long jobId) {}
 
     private record FormData(Map<String, String> params, String rawBody) {
         static FormData empty() {

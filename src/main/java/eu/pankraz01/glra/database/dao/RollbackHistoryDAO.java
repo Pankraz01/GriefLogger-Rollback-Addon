@@ -12,6 +12,9 @@ import eu.pankraz01.glra.database.DBConnection;
 import eu.pankraz01.glra.rollback.RollbackManager;
 
 public final class RollbackHistoryDAO {
+    public record HistoryEntry(long id, long ts, Integer actorId, String actorName, String source, String timeLabel,
+                               long durationMs, String player, String radius, String scope) {}
+
     public void record(Integer actorId, String actorName, String source, String timeLabel, long durationMs, Optional<String> player, Optional<String> radiusLabel, RollbackManager.RollbackKind kind) {
         long now = System.currentTimeMillis();
         long id = now;
@@ -53,6 +56,49 @@ public final class RollbackHistoryDAO {
             }
         }
         return ids;
+    }
+
+    public List<HistoryEntry> loadRecent(int limit, Optional<String> playerFilter) throws SQLException {
+        List<HistoryEntry> entries = new ArrayList<>();
+        if (limit <= 0) return entries;
+
+        StringBuilder sql = new StringBuilder();
+        sql.append("SELECT id, ts, actor_id, actor_name, source, time_label, duration_ms, player, radius, scope ");
+        sql.append("FROM glra_rollback_history ");
+        if (playerFilter.isPresent()) {
+            sql.append("WHERE player = ? OR actor_name = ? ");
+        }
+        sql.append("ORDER BY ts DESC LIMIT ?");
+
+        try (Connection conn = DBConnection.getConnection(); PreparedStatement ps = conn.prepareStatement(sql.toString())) {
+            int idx = 1;
+            if (playerFilter.isPresent()) {
+                String name = playerFilter.get();
+                ps.setString(idx++, name);
+                ps.setString(idx++, name);
+            }
+            ps.setInt(idx, limit);
+
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    Integer actorId = rs.getObject("actor_id") == null ? null : rs.getInt("actor_id");
+                    entries.add(new HistoryEntry(
+                            rs.getLong("id"),
+                            rs.getLong("ts"),
+                            actorId,
+                            rs.getString("actor_name"),
+                            rs.getString("source"),
+                            rs.getString("time_label"),
+                            rs.getLong("duration_ms"),
+                            rs.getString("player"),
+                            rs.getString("radius"),
+                            rs.getString("scope")
+                    ));
+                }
+            }
+        }
+
+        return entries;
     }
 
     private boolean isPrimaryKeyViolation(SQLException e) {
