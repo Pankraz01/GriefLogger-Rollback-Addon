@@ -62,6 +62,22 @@ public class Config {
             .comment("Require a non-empty webApiToken for all web UI/API calls; if true and token is empty, the web UI is disabled")
             .define("requireApiToken", false);
 
+    public static final ModConfigSpec.BooleanValue WEB_AUDIT_ENABLED = BUILDER
+            .comment("Expose the audit dashboard in the web UI (default: true)")
+            .define("webAuditEnabled", true);
+
+    public static final ModConfigSpec.BooleanValue WEB_AUDIT_CHAT_ENABLED = BUILDER
+            .comment("Include chat history in the audit dashboard (default: true)")
+            .define("webAuditChatEnabled", true);
+
+    public static final ModConfigSpec.BooleanValue WEB_AUDIT_BLOCKS_ENABLED = BUILDER
+            .comment("Include block place/break history in the audit dashboard (default: true)")
+            .define("webAuditBlocksEnabled", true);
+
+    public static final ModConfigSpec.BooleanValue WEB_AUDIT_CONTAINERS_ENABLED = BUILDER
+            .comment("Include inventory/container history in the audit dashboard (default: true)")
+            .define("webAuditContainersEnabled", true);
+
     static {
         BUILDER.push("logUnauthorizedWebAccess");
     }

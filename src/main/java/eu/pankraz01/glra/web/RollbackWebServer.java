@@ -36,6 +36,7 @@ import eu.pankraz01.glra.database.dao.WebTokenDAO;
 import eu.pankraz01.glra.database.dao.RollbackHistoryDAO;
 import eu.pankraz01.glra.database.dao.RollbackActionLogDAO;
 import eu.pankraz01.glra.database.dao.UnauthorizedAccessLogDAO;
+import eu.pankraz01.glra.database.dao.AuditDAO;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.MutableComponent;
 import eu.pankraz01.glra.Permissions;
@@ -68,6 +69,7 @@ public final class RollbackWebServer {
     private final RollbackHistoryDAO historyDAO = new RollbackHistoryDAO();
     private final RollbackActionLogDAO actionLogDAO = new RollbackActionLogDAO();
     private final UnauthorizedAccessLogDAO unauthorizedLogDAO = new UnauthorizedAccessLogDAO();
+    private final AuditDAO auditDAO = new AuditDAO();
 
     private HttpServer httpServer;
     private ExecutorService executor;
@@ -87,7 +89,10 @@ public final class RollbackWebServer {
 
         httpServer = HttpServer.create(socket, 0);
         httpServer.createContext("/", this::handleRoot);
+        httpServer.createContext("/audit", this::handleAuditPage);
         httpServer.createContext("/api/rollback", this::handleRollback);
+        httpServer.createContext("/api/audit", this::handleAuditData);
+        httpServer.createContext("/api/audit/meta", this::handleAuditMeta);
         httpServer.createContext("/api/players", this::handlePlayers);
         httpServer.createContext("/api/dimensions", this::handleDimensions);
         httpServer.createContext("/api/lang", this::handleLang);
@@ -160,9 +165,98 @@ public final class RollbackWebServer {
             return;
         }
 
-        String html = loadHtml();
+        String html = loadHtml("web/rollback.html");
         if (html == null) {
             sendPlain(exchange, 500, "Web UI not available (missing resource)");
+            return;
+        }
+        sendHtml(exchange, html);
+    }
+
+    private void handleAuditMeta(HttpExchange exchange) throws IOException {
+        if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+            sendPlain(exchange, 405, "Method Not Allowed");
+            return;
+        }
+        boolean enabled = Config.WEB_AUDIT_ENABLED.get();
+        String json = new StringBuilder()
+                .append('{')
+                .append("\"status\":\"ok\",")
+                .append("\"enabled\":").append(enabled)
+                .append(",\"chat\":").append(enabled && Config.WEB_AUDIT_CHAT_ENABLED.get())
+                .append(",\"blocks\":").append(enabled && Config.WEB_AUDIT_BLOCKS_ENABLED.get())
+                .append(",\"containers\":").append(enabled && Config.WEB_AUDIT_CONTAINERS_ENABLED.get())
+                .append('}')
+                .toString();
+        sendJson(exchange, 200, json);
+    }
+
+    private void handleAuditData(HttpExchange exchange) throws IOException {
+        if (!Config.WEB_AUDIT_ENABLED.get()) {
+            sendJson(exchange, 404, "{\"status\":\"error\",\"message\":\"Audit disabled\"}");
+            return;
+        }
+        if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+            sendJson(exchange, 405, "{\"status\":\"error\",\"message\":\"Use GET\"}");
+            return;
+        }
+
+        AuthResult auth = authorize(exchange, FormData.empty(), false);
+        if (!auth.allowed()) {
+            sendJson(exchange, 401, "{\"status\":\"error\",\"message\":\"Unauthorized\"}");
+            return;
+        }
+
+        int limit = parseLimit(exchange.getRequestURI().getRawQuery(), 100);
+
+        boolean chatEnabled = Config.WEB_AUDIT_CHAT_ENABLED.get();
+        boolean blocksEnabled = Config.WEB_AUDIT_BLOCKS_ENABLED.get();
+        boolean containersEnabled = Config.WEB_AUDIT_CONTAINERS_ENABLED.get();
+
+        StringBuilder json = new StringBuilder();
+        json.append('{');
+        json.append("\"status\":\"ok\"");
+        json.append(",\"enabled\":true");
+        json.append(",\"chatEnabled\":").append(chatEnabled);
+        json.append(",\"blockEnabled\":").append(blocksEnabled);
+        json.append(",\"containerEnabled\":").append(containersEnabled);
+
+        try {
+            if (chatEnabled) {
+                var chat = auditDAO.loadRecentChat(limit);
+                json.append(",\"chat\":").append(toChatJson(chat));
+            }
+            if (blocksEnabled) {
+                var blocks = auditDAO.loadRecentBlocks(limit);
+                json.append(",\"blocks\":").append(toBlockJson(blocks));
+            }
+            if (containersEnabled) {
+                var containers = auditDAO.loadRecentContainers(limit);
+                json.append(",\"containers\":").append(toContainerJson(containers));
+            }
+        } catch (Exception e) {
+            LOGGER.error("Failed to load audit data", e);
+            sendJson(exchange, 500, "{\"status\":\"error\",\"message\":\"Could not load audit data\"}");
+            return;
+        }
+
+        json.append('}');
+        sendJson(exchange, 200, json.toString());
+    }
+
+    private void handleAuditPage(HttpExchange exchange) throws IOException {
+        if (!Config.WEB_AUDIT_ENABLED.get()) {
+            sendPlain(exchange, 404, "Audit disabled");
+            return;
+        }
+        if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+            sendPlain(exchange, 405, "Method Not Allowed");
+            return;
+        }
+
+        String html = loadHtml("web/audit.html");
+        if (html == null) {
+            sendPlain(exchange, 500, "Audit UI not available (missing resource)");
             return;
         }
         sendHtml(exchange, html);
@@ -520,12 +614,87 @@ public final class RollbackWebServer {
         }
     }
 
-    private String loadHtml() {
-        try (var in = getClass().getClassLoader().getResourceAsStream("web/rollback.html")) {
+    private String toChatJson(Iterable<eu.pankraz01.glra.database.dao.AuditDAO.ChatEntry> chat) {
+        StringBuilder sb = new StringBuilder();
+        sb.append('[');
+        boolean first = true;
+        for (var entry : chat) {
+            if (!first) sb.append(',');
+            sb.append('{')
+                    .append("\"ts\":").append(entry.ts())
+                    .append(",\"player\":\"").append(escapeJson(entry.playerName())).append("\"")
+                    .append(",\"message\":\"").append(escapeJson(entry.message())).append("\"")
+                    .append('}');
+            first = false;
+        }
+        sb.append(']');
+        return sb.toString();
+    }
+
+    private String toBlockJson(Iterable<eu.pankraz01.glra.database.dao.AuditDAO.BlockEntry> blocks) {
+        StringBuilder sb = new StringBuilder();
+        sb.append('[');
+        boolean first = true;
+        for (var entry : blocks) {
+            if (!first) sb.append(',');
+            sb.append('{')
+                    .append("\"ts\":").append(entry.ts())
+                    .append(",\"player\":\"").append(escapeJson(entry.playerName())).append("\"")
+                    .append(",\"level\":\"").append(escapeJson(entry.levelName())).append("\"")
+                    .append(",\"x\":").append(entry.x())
+                    .append(",\"y\":").append(entry.y())
+                    .append(",\"z\":").append(entry.z())
+                    .append(",\"material\":\"").append(escapeJson(entry.materialName())).append("\"")
+                    .append(",\"action\":").append(entry.actionCode())
+                    .append('}');
+            first = false;
+        }
+        sb.append(']');
+        return sb.toString();
+    }
+
+    private String toContainerJson(Iterable<eu.pankraz01.glra.database.dao.AuditDAO.ContainerEntry> containers) {
+        StringBuilder sb = new StringBuilder();
+        sb.append('[');
+        boolean first = true;
+        for (var entry : containers) {
+            if (!first) sb.append(',');
+            sb.append('{')
+                    .append("\"ts\":").append(entry.ts())
+                    .append(",\"player\":\"").append(escapeJson(entry.playerName())).append("\"")
+                    .append(",\"level\":\"").append(escapeJson(entry.levelName())).append("\"")
+                    .append(",\"x\":").append(entry.x())
+                    .append(",\"y\":").append(entry.y())
+                    .append(",\"z\":").append(entry.z())
+                    .append(",\"material\":\"").append(escapeJson(entry.materialName())).append("\"")
+                    .append(",\"amount\":").append(entry.amount())
+                    .append(",\"action\":").append(entry.actionCode())
+                    .append('}');
+            first = false;
+        }
+        sb.append(']');
+        return sb.toString();
+    }
+
+    private int parseLimit(String rawQuery, int def) {
+        if (rawQuery == null || rawQuery.isEmpty()) return def;
+        for (String param : rawQuery.split("&")) {
+            if (!param.startsWith("limit=")) continue;
+            try {
+                int parsed = Integer.parseInt(param.substring(6));
+                if (parsed > 0 && parsed <= 500) return parsed;
+            } catch (NumberFormatException ignored) {
+            }
+        }
+        return def;
+    }
+
+    private String loadHtml(String resourcePath) {
+        try (var in = getClass().getClassLoader().getResourceAsStream(resourcePath)) {
             if (in == null) return null;
             return new String(in.readAllBytes(), StandardCharsets.UTF_8);
         } catch (IOException e) {
-            LOGGER.warn("Failed to load rollback web UI HTML", e);
+            LOGGER.warn("Failed to load web UI HTML {}", resourcePath, e);
             return null;
         }
     }

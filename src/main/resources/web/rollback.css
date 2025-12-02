@@ -35,6 +35,24 @@ body {
   margin: 0 0 16px;
 }
 
+.header.split {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.action-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.action-row button {
+  width: auto;
+}
+
 .card {
   background: rgba(15, 23, 42, 0.7);
   border: 1px solid #1f2937;
@@ -118,6 +136,27 @@ button:active {
   transform: translateY(1px);
 }
 
+.button.secondary,
+.action-row .secondary {
+  background: transparent;
+  color: #cbd5e1;
+  border: 1px solid #334155;
+  width: auto;
+  text-decoration: none;
+  padding: 10px 12px;
+}
+
+.button.secondary:hover,
+.action-row .secondary:hover {
+  background: #0b1220;
+}
+
+.settings-row {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
 .muted {
   color: #94a3b8;
   margin-top: 8px;
@@ -159,6 +198,61 @@ button:active {
   opacity: 1;
   transform: translateY(0);
   pointer-events: auto;
+}
+
+.tabs {
+  display: flex;
+  gap: 8px;
+  margin: 12px 0 8px;
+}
+
+.tab {
+  border: 1px solid #334155;
+  background: rgba(2, 6, 23, 0.5);
+  color: #cbd5e1;
+  padding: 8px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  width: auto;
+}
+
+.tab.active {
+  border-color: #10b981;
+  color: #10b981;
+  background: rgba(16, 185, 129, 0.1);
+}
+
+.tab:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.tab-panel {
+  display: none;
+  margin-top: 6px;
+}
+
+.tab-panel.active {
+  display: block;
+}
+
+.audit-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.audit-title {
+  color: #cbd5e1;
+  font-weight: 600;
+}
+
+.audit-body {
+  color: #8b949e;
+  font-size: 14px;
 }
 
 /* Responsive tweaks */

@@ -6,11 +6,14 @@
   <link rel="stylesheet" href="/web/rollback.css" />
 </head>
 <body class="page">
-  <div class="container">
-    <div class="header">
-      <h1 id="title">Rollback</h1>
-      <p id="subtitle"></p>
-    </div>
+    <div class="container">
+      <div class="header">
+        <h1 id="title">Rollback</h1>
+        <p id="subtitle"></p>
+        <div class="action-row" id="audit-link-wrapper" style="display:none;">
+          <a id="audit-link" class="button secondary" href="/audit">Open audit</a>
+        </div>
+      </div>
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
     <div class="card">
       <form id="rollback-form" class="form">
@@ -83,6 +86,8 @@
     const playerList = document.getElementById('player-list');
     const dimensionInput = document.getElementById('dimension-input');
     const dimensionList = document.getElementById('dimension-list');
+    const auditLinkWrapper = document.getElementById('audit-link-wrapper');
+    const auditLink = document.getElementById('audit-link');
     const labels = {
       title: document.getElementById('title'),
       subtitle: document.getElementById('subtitle'),
@@ -101,6 +106,62 @@
     };
     let messages = {};
 
+    const initialToken = localStorage.getItem('glraToken') || new URLSearchParams(location.search).get('token');
+    if (initialToken && !document.getElementById('token-input').value) {
+      document.getElementById('token-input').value = initialToken;
+    }
+
+    function getToken() {
+      const current = (document.getElementById('token-input').value || '').trim();
+      if (current) return current;
+      const stored = localStorage.getItem('glraToken');
+      if (stored) return stored;
+      const viaUrl = new URLSearchParams(location.search).get('token');
+      return viaUrl || '';
+    }
+
+    function buildHeaders() {
+      const headers = { 'Accept': 'application/json' };
+      const token = getToken();
+      if (token) headers['X-Auth-Token'] = token;
+      return headers;
+    }
+
+    function persistToken() {
+      const token = document.getElementById('token-input').value.trim();
+      if (token) {
+        localStorage.setItem('glraToken', token);
+      } else {
+        localStorage.removeItem('glraToken');
+      }
+      updateAuditLink();
+    }
+
+    function updateAuditLink() {
+      const token = getToken();
+      if (token) {
+        auditLink.href = '/audit?token=' + encodeURIComponent(token);
+      } else {
+        auditLink.href = '/audit';
+      }
+    }
+
+    document.getElementById('token-input').addEventListener('change', persistToken);
+    updateAuditLink();
+
+    async function loadAuditMeta() {
+      try {
+        const res = await fetch('/api/audit/meta');
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.enabled) {
+          auditLinkWrapper.style.display = 'flex';
+        }
+      } catch (err) {
+        console.warn('Audit meta fetch failed', err);
+      }
+    }
+
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       result.textContent = t('sending', 'Sending...');
@@ -116,6 +177,7 @@
         result.style.color = '#ff7b72';
         showToast('Error: ' + err, 'error');
       }
+      persistToken();
     });
 
     function t(key, fallback) {
@@ -158,7 +220,7 @@
 
     async function loadPlayers() {
       try {
-        const res = await fetch('/api/players', { headers: { 'Accept': 'application/json' }});
+        const res = await fetch('/api/players', { headers: buildHeaders() });
         if (!res.ok) return;
         const data = await res.json();
         if (!data.players) return;
@@ -175,7 +237,7 @@
 
     async function loadDimensions() {
       try {
-        const res = await fetch('/api/dimensions', { headers: { 'Accept': 'application/json' }});
+        const res = await fetch('/api/dimensions', { headers: buildHeaders() });
         if (!res.ok) return;
         const data = await res.json();
         if (!data.dimensions) return;
@@ -193,7 +255,7 @@
     async function loadTranslations() {
       try {
         const lang = (navigator.language || 'en').toLowerCase();
-        const res = await fetch('/api/lang?lang=' + encodeURIComponent(lang), { headers: { 'Accept': 'application/json' }});
+        const res = await fetch('/api/lang?lang=' + encodeURIComponent(lang), { headers: buildHeaders() });
         if (!res.ok) return;
         const data = await res.json();
         messages = data.messages || {};
@@ -221,6 +283,7 @@
     loadTranslations();
     loadPlayers();
     loadDimensions();
+    loadAuditMeta();
   </script>
 </body>
 </html>
