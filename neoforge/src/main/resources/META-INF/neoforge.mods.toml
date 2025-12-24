@@ -1,0 +1,45 @@
+modLoader = "javafml"
+loaderVersion = "[10,)"
+#issueTrackerURL = ""
+license = "Insert License Here"
+
+[[mods]]
+modId = "griefloggerrollbackaddon"
+version = "${version}"
+displayName = "Grieflogger Rollback Addon"
+authors = "GLRA"
+description = '''
+Rollback addon for Grieflogger with web UI and commands
+'''
+#logoFile = ""
+
+[[dependencies.griefloggerrollbackaddon]]
+modId = "neoforge"
+type = "required"
+versionRange = "[21.10,)"
+ordering = "NONE"
+side = "BOTH"
+
+[[dependencies.griefloggerrollbackaddon]]
+modId = "minecraft"
+type = "required"
+versionRange = "[1.21.1,1.21.11)"
+ordering = "NONE"
+side = "BOTH"
+
+[[dependencies.griefloggerrollbackaddon]]
+modId = "architectury"
+type = "required"
+versionRange = "[18.0.6,)"
+ordering = "AFTER"
+side = "BOTH"
+
+[[dependencies.griefloggerrollbackaddon]]
+modId = "grieflogger"
+type = "required"
+versionRange = "*"
+ordering = "AFTER"
+side = "SERVER"
+
+[[mixins]]
+config = "griefloggerrollbackaddon.mixins.json"

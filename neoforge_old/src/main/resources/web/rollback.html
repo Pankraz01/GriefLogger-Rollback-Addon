@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Rollback UI</title>
+  <link rel="stylesheet" href="/web/rollback.css" />
+</head>
+<body class="page">
+    <div class="container">
+      <div class="header">
+        <h1 id="title">Rollback</h1>
+        <p id="subtitle"></p>
+        <div class="action-row" id="audit-link-wrapper" style="display:none;">
+          <a id="audit-link" class="button secondary" href="/audit">Open audit</a>
+        </div>
+      </div>
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <div class="card">
+      <form id="rollback-form" class="form">
+        <div class="field">
+          <label id="lbl-time">Time window</label>
+          <input type="text" name="time" id="time-input" placeholder="30m" required />
+        </div>
+
+        <div class="field">
+          <label id="lbl-player">Player</label>
+          <select name="player" id="player-select">
+            <option value="">Any player</option>
+          </select>
+        </div>
+
+        <div class="checkboxes">
+          <label id="lbl-blocks"><input type="checkbox" name="blocks" checked /> Blocks (B)</label>
+          <label id="lbl-items"><input type="checkbox" name="items" checked /> Items (I)</label>
+        </div>
+
+        <div class="field">
+          <label id="lbl-radius">Radius</label>
+          <div class="row">
+            <input type="number" name="radius" min="1" placeholder="25" />
+            <select name="radiusUnit" id="radius-unit">
+              <option value="blocks" selected>Blocks</option>
+              <option value="chunks">Chunks</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="field grow">
+            <label id="lbl-centerx">Center X (radius)</label>
+            <input type="number" name="centerX" placeholder="0" />
+          </div>
+          <div class="field grow">
+            <label id="lbl-centerz">Center Z (radius)</label>
+            <input type="number" name="centerZ" placeholder="0" />
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="field grow">
+            <label id="lbl-centery">Center Y (optional, default 64)</label>
+            <input type="number" name="centerY" placeholder="64" />
+          </div>
+          <div class="field grow">
+            <label id="lbl-dimension">Dimension</label>
+            <select name="dimension" id="dimension-select">
+              <option value="">Any dimension</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="field">
+          <label id="lbl-token">Token</label>
+          <input type="password" name="token" id="token-input" autocomplete="current-password" />
+        </div>
+
+        <button type="submit" id="btn-submit">Start rollback</button>
+      </form>
+      <div id="result" class="muted"></div>
+    </div>
+  </div>
+
+  <script>
+    const form = document.getElementById('rollback-form');
+    const result = document.getElementById('result');
+    const toast = document.getElementById('toast');
+    const playerSelect = document.getElementById('player-select');
+    const dimensionSelect = document.getElementById('dimension-select');
+    const auditLinkWrapper = document.getElementById('audit-link-wrapper');
+    const auditLink = document.getElementById('audit-link');
+    const labels = {
+      title: document.getElementById('title'),
+      subtitle: document.getElementById('subtitle'),
+      time: document.getElementById('lbl-time'),
+      player: document.getElementById('lbl-player'),
+      blocks: document.getElementById('lbl-blocks'),
+      items: document.getElementById('lbl-items'),
+      radius: document.getElementById('lbl-radius'),
+      centerx: document.getElementById('lbl-centerx'),
+      centerz: document.getElementById('lbl-centerz'),
+      centery: document.getElementById('lbl-centery'),
+      dimension: document.getElementById('lbl-dimension'),
+      token: document.getElementById('lbl-token'),
+      submit: document.getElementById('btn-submit'),
+      radiusUnit: document.getElementById('radius-unit')
+    };
+    let messages = {};
+
+    const initialToken = localStorage.getItem('glraToken') || new URLSearchParams(location.search).get('token');
+    if (initialToken && !document.getElementById('token-input').value) {
+      document.getElementById('token-input').value = initialToken;
+    }
+
+    function getToken() {
+      const current = (document.getElementById('token-input').value || '').trim();
+      if (current) return current;
+      const stored = localStorage.getItem('glraToken');
+      if (stored) return stored;
+      const viaUrl = new URLSearchParams(location.search).get('token');
+      return viaUrl || '';
+    }
+
+    function buildHeaders() {
+      const headers = { 'Accept': 'application/json' };
+      const token = getToken();
+      if (token) headers['X-Auth-Token'] = token;
+      return headers;
+    }
+
+    function persistToken() {
+      const token = document.getElementById('token-input').value.trim();
+      if (token) {
+        localStorage.setItem('glraToken', token);
+      } else {
+        localStorage.removeItem('glraToken');
+      }
+      updateAuditLink();
+    }
+
+    function updateAuditLink() {
+      const token = getToken();
+      if (token) {
+        auditLink.href = '/audit?token=' + encodeURIComponent(token);
+      } else {
+        auditLink.href = '/audit';
+      }
+    }
+
+    document.getElementById('token-input').addEventListener('change', persistToken);
+    updateAuditLink();
+
+    async function loadAuditMeta() {
+      try {
+        const res = await fetch('/api/audit/meta');
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.enabled) {
+          auditLinkWrapper.style.display = 'flex';
+        }
+      } catch (err) {
+        console.warn('Audit meta fetch failed', err);
+      }
+    }
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      result.textContent = t('sending', 'Sending...');
+      const data = new URLSearchParams(new FormData(form));
+      try {
+        const res = await fetch('/api/rollback', { method: 'POST', body: data, headers: { 'Accept': 'application/json' }});
+        const txt = await res.text();
+        showToast(parseServerMessage(txt || (res.status + ' ' + res.statusText)), res.ok ? 'success' : 'error');
+        result.textContent = txt || res.status + ' ' + res.statusText;
+        if (!res.ok) result.style.color = '#ff7b72'; else result.style.color = '#8b949e';
+      } catch (err) {
+        result.textContent = 'Error: ' + err;
+        result.style.color = '#ff7b72';
+        showToast('Error: ' + err, 'error');
+      }
+      persistToken();
+    });
+
+    function t(key, fallback) {
+      return messages[key] || fallback;
+    }
+
+    function parseServerMessage(raw) {
+        if (!raw) return '';
+        try {
+            const obj = JSON.parse(raw);
+            if (obj && obj.status === 'ok') {
+                return [
+                    t('toast.started', 'Rollback started'),
+                    obj.time ? `⏱ ${obj.time}` : null,
+                    obj.player ? `👤 ${obj.player}` : null,
+                    obj.radius ? `🧭 ${obj.radius}` : null,
+                    obj.scope ? `📦 ${obj.scope}` : null
+                ].filter(Boolean).join(' · ');
+            }
+        } catch (_) {
+            // plain text fallback
+        }
+        return raw;
+    }
+
+    let toastTimeout;
+    function showToast(text, variant = 'info') {
+      if (!text) return;
+      toast.textContent = text;
+      toast.className = `toast ${variant}`;
+      toast.setAttribute('aria-hidden', 'false');
+      clearTimeout(toastTimeout);
+      toastTimeout = setTimeout(() => hideToast(), 6000);
+    }
+
+    function hideToast() {
+      toast.setAttribute('aria-hidden', 'true');
+      toast.className = 'toast';
+    }
+
+    async function loadPlayers() {
+      try {
+        const res = await fetch('/api/players', { headers: buildHeaders() });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!data.players) return;
+        const current = playerSelect.value;
+        playerSelect.innerHTML = '';
+        const anyOpt = document.createElement('option');
+        anyOpt.value = '';
+        anyOpt.textContent = t('playerAny', 'Any player');
+        playerSelect.appendChild(anyOpt);
+        data.players.forEach(name => {
+          const opt = document.createElement('option');
+          opt.value = name;
+          opt.textContent = name;
+          playerSelect.appendChild(opt);
+        });
+        if (current && data.players.includes(current)) {
+          playerSelect.value = current;
+        }
+      } catch (err) {
+        console.warn('Player fetch failed', err);
+      }
+    }
+
+    async function loadDimensions() {
+      try {
+        const res = await fetch('/api/dimensions', { headers: buildHeaders() });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!data.dimensions) return;
+        const current = dimensionSelect.value;
+        dimensionSelect.innerHTML = '';
+        const anyOpt = document.createElement('option');
+        anyOpt.value = '';
+        anyOpt.textContent = t('dimensionAny', 'Any dimension');
+        dimensionSelect.appendChild(anyOpt);
+        data.dimensions.forEach(dim => {
+          const opt = document.createElement('option');
+          opt.value = dim;
+          opt.textContent = dim;
+          dimensionSelect.appendChild(opt);
+        });
+        if (current && data.dimensions.includes(current)) {
+          dimensionSelect.value = current;
+        }
+      } catch (err) {
+        console.warn('Dimension fetch failed', err);
+      }
+    }
+
+    async function loadTranslations() {
+      try {
+        const lang = (navigator.language || 'en').toLowerCase();
+        const res = await fetch('/api/lang?lang=' + encodeURIComponent(lang), { headers: buildHeaders() });
+        if (!res.ok) return;
+        const data = await res.json();
+        messages = data.messages || {};
+        labels.title.textContent = t('title', 'Rollback');
+        labels.subtitle.textContent = t('subtitle', '');
+        labels.time.textContent = t('time', labels.time.textContent);
+        labels.player.textContent = t('player', labels.player.textContent);
+        labels.blocks.childNodes[1].textContent = ' ' + t('blocks', 'Blocks (B)');
+        labels.items.childNodes[1].textContent = ' ' + t('items', 'Items (I)');
+        labels.radius.textContent = t('radius', labels.radius.textContent);
+        labels.centerx.textContent = t('centerX', labels.centerx.textContent);
+        labels.centerz.textContent = t('centerZ', labels.centerz.textContent);
+        labels.centery.textContent = t('centerY', labels.centery.textContent);
+        labels.dimension.textContent = t('dimension', labels.dimension.textContent);
+        labels.token.textContent = t('token', labels.token.textContent);
+        labels.submit.textContent = t('submit', labels.submit.textContent);
+        labels.radiusUnit.querySelector('option[value="blocks"]').textContent = t('radiusUnit.blocks', 'Blocks');
+        labels.radiusUnit.querySelector('option[value="chunks"]').textContent = t('radiusUnit.chunks', 'Chunks');
+        const playerAny = t('playerAny', 'Any player');
+        const dimAny = t('dimensionAny', 'Any dimension');
+        if (playerSelect.options.length > 0) playerSelect.options[0].textContent = playerAny;
+        if (dimensionSelect.options.length > 0) dimensionSelect.options[0].textContent = dimAny;
+        result.textContent = '';
+      } catch (err) {
+        console.warn('Lang fetch failed', err);
+      }
+    }
+
+    loadTranslations();
+    loadPlayers();
+    loadDimensions();
+    loadAuditMeta();
+  </script>
+</body>
+</html>

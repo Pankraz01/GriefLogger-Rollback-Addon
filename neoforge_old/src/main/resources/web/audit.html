@@ -1,0 +1,730 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Audit</title>
+  <link rel="stylesheet" href="/web/rollback.css" />
+</head>
+<body class="page">
+  <div class="container">
+    <div class="header split">
+      <div>
+        <h1>Audit</h1>
+        <p id="subtitle">Live history from the database</p>
+      </div>
+      <div class="action-row">
+        <a class="button secondary" href="/">⟵ Rollback</a>
+        <button id="btn-refresh" type="button">Refresh now</button>
+      </div>
+    </div>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+    <div class="card">
+      <div class="settings-row">
+        <div class="field">
+          <label for="token-input">Token</label>
+          <input type="password" id="token-input" placeholder="Token" autocomplete="current-password" />
+        </div>
+        <div class="field">
+          <label for="limit-input">Max entries per tab</label>
+          <input type="number" id="limit-input" value="100" min="10" max="500" />
+        </div>
+        <div class="field">
+          <label for="auto-interval">Auto refresh (s)</label>
+          <div class="split">
+            <input type="number" id="auto-interval" value="10" min="3" max="300" />
+            <label class="checkbox">
+              <input type="checkbox" id="auto-toggle" checked /> enable
+            </label>
+          </div>
+        </div>
+      </div>
+      <div class="settings-row">
+        <div class="field">
+          <label for="player-filter">Player filter</label>
+          <input type="text" id="player-filter" placeholder="Exact player name" />
+        </div>
+        <div class="field">
+          <label for="dimension-filter">Dimension</label>
+          <select id="dimension-filter">
+            <option value="">All</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="block-action-filter">Block action</label>
+          <select id="block-action-filter">
+            <option value="">All</option>
+            <option value="0">Break</option>
+            <option value="1">Place</option>
+            <option value="2">Interact</option>
+            <option value="3">Kill</option>
+            <option value="4">TNT Ignite</option>
+            <option value="5">TNT Explosion</option>
+            <option value="6">TNT Redstone</option>
+            <option value="7">N/A</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="container-action-filter">Inventory action</label>
+          <select id="container-action-filter">
+            <option value="">All</option>
+            <option value="1">Add</option>
+            <option value="0">Remove</option>
+            <option value="2">Change</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>&nbsp;</label>
+          <button id="btn-apply-filters" type="button">Apply filters</button>
+        </div>
+      </div>
+      <div id="status" class="muted"></div>
+      <div class="tabs" role="tablist">
+        <button class="tab active" data-tab="chat" role="tab">Chat</button>
+        <button class="tab" data-tab="blocks" role="tab">Blocks</button>
+        <button class="tab" data-tab="containers" role="tab">Inventory</button>
+        <button class="tab" data-tab="rollback-actions" role="tab">Rollback actions</button>
+        <button class="tab" data-tab="history" role="tab">History</button>
+      </div>
+      <div id="panel-chat" class="tab-panel active" role="tabpanel"></div>
+      <div id="panel-blocks" class="tab-panel" role="tabpanel"></div>
+      <div id="panel-containers" class="tab-panel" role="tabpanel"></div>
+      <div id="panel-rollback-actions" class="tab-panel" role="tabpanel"></div>
+      <div id="panel-history" class="tab-panel" role="tabpanel"></div>
+    </div>
+  </div>
+
+  <script>
+    const panels = {
+      chat: document.getElementById('panel-chat'),
+      blocks: document.getElementById('panel-blocks'),
+      containers: document.getElementById('panel-containers'),
+      rollbackActions: document.getElementById('panel-rollback-actions'),
+      history: document.getElementById('panel-history')
+    };
+    const tabs = document.querySelectorAll('.tab');
+    const toast = document.getElementById('toast');
+    const status = document.getElementById('status');
+    const tokenInput = document.getElementById('token-input');
+    const limitInput = document.getElementById('limit-input');
+    const autoIntervalInput = document.getElementById('auto-interval');
+    const autoToggle = document.getElementById('auto-toggle');
+    const refreshBtn = document.getElementById('btn-refresh');
+    const playerFilterInput = document.getElementById('player-filter');
+    const dimensionFilter = document.getElementById('dimension-filter');
+    const blockActionFilter = document.getElementById('block-action-filter');
+    const containerActionFilter = document.getElementById('container-action-filter');
+    const applyFiltersBtn = document.getElementById('btn-apply-filters');
+
+    let refreshHandle;
+
+    function savedToken() {
+      const fromInput = (tokenInput.value || '').trim();
+      if (fromInput) return fromInput;
+      const stored = localStorage.getItem('glraToken');
+      if (stored) return stored;
+      const viaUrl = new URLSearchParams(location.search).get('token');
+      return viaUrl || '';
+    }
+
+    function applySavedToken() {
+      const token = savedToken();
+      if (token && !tokenInput.value) tokenInput.value = token;
+    }
+
+    function showToast(text, variant = 'info') {
+      if (!text) return;
+      toast.textContent = text;
+      toast.className = `toast ${variant}`;
+      toast.setAttribute('aria-hidden', 'false');
+      clearTimeout(window.__toastTimeout);
+      window.__toastTimeout = setTimeout(() => hideToast(), 6000);
+    }
+
+    function hideToast() {
+      toast.setAttribute('aria-hidden', 'true');
+      toast.className = 'toast';
+    }
+
+    function switchTab(id) {
+      tabs.forEach(tab => tab.classList.toggle('active', tab.dataset.tab === id));
+      Object.entries(panels).forEach(([key, el]) => {
+        el.classList.toggle('active', key === id);
+      });
+    }
+
+    tabs.forEach(tab => tab.addEventListener('click', () => switchTab(tab.dataset.tab)));
+
+    function headers() {
+      const token = savedToken();
+      const h = { 'Accept': 'application/json' };
+      if (token) h['X-Auth-Token'] = token;
+      return h;
+    }
+
+    function loadAutoSettings() {
+      const storedInterval = parseInt(localStorage.getItem('glraAuditInterval') || '10');
+      if (!Number.isNaN(storedInterval)) autoIntervalInput.value = storedInterval;
+      const storedToggle = localStorage.getItem('glraAuditAuto');
+      if (storedToggle !== null) autoToggle.checked = storedToggle === 'true';
+    }
+
+    function saveAutoSettings() {
+      localStorage.setItem('glraAuditInterval', autoIntervalInput.value);
+      localStorage.setItem('glraAuditAuto', autoToggle.checked ? 'true' : 'false');
+    }
+
+    function applySavedFilters() {
+      const savedPlayer = localStorage.getItem('glraAuditPlayer') || '';
+      const savedDim = localStorage.getItem('glraAuditDimension') || '';
+      const savedBlockAction = localStorage.getItem('glraAuditBlockAction') || '';
+      const savedContainerAction = localStorage.getItem('glraAuditContainerAction') || '';
+      if (savedPlayer) playerFilterInput.value = savedPlayer;
+      if (savedDim) dimensionFilter.value = savedDim;
+      if (savedBlockAction) blockActionFilter.value = savedBlockAction;
+      if (savedContainerAction) containerActionFilter.value = savedContainerAction;
+    }
+
+    function saveFilters() {
+      localStorage.setItem('glraAuditPlayer', (playerFilterInput.value || '').trim());
+      localStorage.setItem('glraAuditDimension', dimensionFilter.value || '');
+      localStorage.setItem('glraAuditBlockAction', blockActionFilter.value || '');
+      localStorage.setItem('glraAuditContainerAction', containerActionFilter.value || '');
+    }
+
+    function currentFilters() {
+      return {
+        player: (playerFilterInput.value || '').trim(),
+        dimension: dimensionFilter.value || '',
+        blockAction: blockActionFilter.value || '',
+        containerAction: containerActionFilter.value || ''
+      };
+    }
+
+    async function loadDimensions() {
+      try {
+        const res = await fetch('/api/dimensions', { headers: headers() });
+        if (!res.ok) return;
+        const data = await res.json();
+        const dims = data.dimensions || [];
+        dimensionFilter.innerHTML = '<option value=\"\">All</option>' + dims.map(d => `<option value=\"${escapeHtml(d)}\">${escapeHtml(d)}</option>`).join('');
+        applySavedFilters();
+      } catch (err) {
+        console.warn('Could not load dimensions', err);
+      }
+    }
+
+    async function loadMeta() {
+      try {
+        const res = await fetch('/api/audit/meta');
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!data.enabled) {
+          status.textContent = 'Audit dashboard is disabled in the config.';
+          stopAutoRefresh();
+          return false;
+        }
+        tabs.forEach(tab => {
+          const enabled = data[tab.dataset.tab] ?? (tab.dataset.tab === 'rollback-actions' ? data.rollbackActionsEnabled : undefined);
+          tab.disabled = !enabled;
+          if (!enabled) {
+            panels[tab.dataset.tab].innerHTML = '<p class="muted">Disabled in config.</p>';
+          }
+        });
+        return true;
+      } catch (err) {
+        console.warn('Audit meta failed', err);
+        return false;
+      }
+    }
+
+    function renderChat(entries) {
+      return renderTable(entries, [
+        { label: 'Time', render: e => formatTs(e.ts) },
+        { label: 'Player', render: e => escapeHtml(e.player || 'Unknown') },
+        { label: 'Message', render: e => escapeHtml(e.message || '') }
+      ], 'No chat messages found.');
+    }
+
+    function renderBlocks(entries) {
+      if (!entries || entries.length === 0) return '<p class="muted">No block actions found.</p>';
+      let header = `<th><input type="checkbox" id="blocks-select-all" aria-label="Select all blocks" /></th>`;
+      const columns = [
+        { label: 'Time', render: e => formatTs(e.ts) },
+        { label: 'Player', render: e => escapeHtml(e.player || 'Unknown') },
+        { label: 'Action', render: e => `<span class="pill ${blockPillClass(e.action)}">${blockActionLabel(e)}</span>` },
+        { label: 'Block', render: e => escapeHtml(e.material || 'unknown') },
+        { label: 'Location', render: e => `<span class="mono">${escapeHtml(e.level || '')} @ ${e.x},${e.y},${e.z}</span>` },
+        { label: '', render: e => `<button class="mini" data-rollback-block='${JSON.stringify({ts:e.ts,player:e.player,level:e.level,x:e.x,y:e.y,z:e.z,key:rollbackKey(e)})}'>Rollback</button>` }
+      ];
+      header += columns.map(c => `<th>${escapeHtml(c.label)}</th>`).join('');
+      const rows = entries.map(e => {
+        const checkbox = `<td><input type="checkbox" data-rollback-block='${JSON.stringify({ts:e.ts,player:e.player,level:e.level,x:e.x,y:e.y,z:e.z,key:rollbackKey(e)})}' aria-label="Select block action" /></td>`;
+        const cells = columns.map(c => `<td>${c.render(e)}</td>`).join('');
+        return `<tr>${checkbox}${cells}</tr>`;
+      }).join('');
+      const toolbar = `<div class="action-row"><button id="btn-rollback-blocks" type="button" disabled>Rollback selected</button><span id="rollback-blocks-count" class="muted">0 selected</span></div>`;
+      return `${toolbar}<table class="audit-table"><thead><tr>${header}</tr></thead><tbody>${rows}</tbody></table>`;
+    }
+
+    function renderContainers(entries) {
+      if (!entries || entries.length === 0) return '<p class="muted">No inventory actions found.</p>';
+      let header = `<th><input type="checkbox" id="containers-select-all" aria-label="Select all containers" /></th>`;
+      const columns = [
+        { label: 'Time', render: e => formatTs(e.ts) },
+        { label: 'Player', render: e => escapeHtml(e.player || 'Unknown') },
+        { label: 'Action', render: e => `<span class="pill ${containerPillClass(e.action)}">${containerActionLabel(e.action)}</span>` },
+        { label: 'Item', render: e => `${e.amount || 0}x ${escapeHtml(e.material || 'unknown')}` },
+        { label: 'Location', render: e => `<span class="mono">${escapeHtml(e.level || '')} @ ${e.x},${e.y},${e.z}</span>` },
+        { label: '', render: e => `<button class="mini" data-rollback-container='${JSON.stringify({ts:e.ts,player:e.player,level:e.level,x:e.x,y:e.y,z:e.z,key:rollbackKey(e)})}'>Rollback</button>` }
+      ];
+      header += columns.map(c => `<th>${escapeHtml(c.label)}</th>`).join('');
+      const rows = entries.map(e => {
+        const checkbox = `<td><input type="checkbox" data-rollback-container='${JSON.stringify({ts:e.ts,player:e.player,level:e.level,x:e.x,y:e.y,z:e.z,key:rollbackKey(e)})}' aria-label="Select container action" /></td>`;
+        const cells = columns.map(c => `<td>${c.render(e)}</td>`).join('');
+        return `<tr>${checkbox}${cells}</tr>`;
+      }).join('');
+      const toolbar = `<div class="action-row"><button id="btn-rollback-containers" type="button" disabled>Rollback selected</button><span id="rollback-containers-count" class="muted">0 selected</span></div>`;
+      return `${toolbar}<table class="audit-table"><thead><tr>${header}</tr></thead><tbody>${rows}</tbody></table>`;
+    }
+
+    function renderHistory(entries) {
+      if (!entries || entries.length === 0) return '<p class="muted">No rollback history found.</p>';
+      let header = `<th><input type="checkbox" id="history-select-all" aria-label="Select all history" /></th>`;
+      const columns = [
+        { label: 'Time', render: e => formatTs(e.ts) },
+        { label: 'Actor', render: e => escapeHtml(e.actor || 'Unknown') },
+        { label: 'Source', render: e => escapeHtml(e.source || '') },
+        { label: 'Window', render: e => escapeHtml(e.time || '') },
+        { label: 'Player filter', render: e => escapeHtml(e.player || 'all') },
+        { label: 'Radius', render: e => escapeHtml(e.radius || 'global') },
+        { label: 'Scope', render: e => escapeHtml(e.scope || '') },
+        { label: '', render: e => `<button class="mini" data-rollback-history="${e.id}">Undo</button>` }
+      ];
+      header += columns.map(c => `<th>${escapeHtml(c.label)}</th>`).join('');
+      const rows = entries.map(e => {
+        const checkbox = `<td><input type="checkbox" data-rollback-history="${e.id}" aria-label="Select history ${e.id}" /></td>`;
+        const cells = columns.map(c => `<td>${c.render(e)}</td>`).join('');
+        return `<tr>${checkbox}${cells}</tr>`;
+      }).join('');
+      const toolbar = `<div class="action-row"><button id="btn-rollback-history" type="button" disabled>Undo selected</button><span id="rollback-history-count" class="muted">0 selected</span></div>`;
+      return `${toolbar}<table class="audit-table"><thead><tr>${header}</tr></thead><tbody>${rows}</tbody></table>`;
+    }
+
+    function renderRollbackActions(entries) {
+      if (!entries || entries.length === 0) return '<p class="muted">No rollback actions logged yet.</p>';
+      let header = `<th><input type="checkbox" id="rollback-select-all" aria-label="Select all" /></th>`;
+      const columns = [
+        { label: 'Time', render: e => formatTs(e.ts) },
+        { label: 'Job', render: e => e.jobId },
+        { label: 'Type', render: e => escapeHtml((e.type || '').toUpperCase()) },
+        { label: 'Action', render: e => `<span class="pill ${rollbackPillClass(e)}">${rollbackActionLabel(e)}</span>` },
+        { label: 'Block/Item', render: e => escapeHtml(e.material || '') },
+        { label: 'Prev', render: e => escapeHtml(e.oldMaterial || '') },
+        { label: 'Amount', render: e => e.amount || 0 },
+        { label: 'Location', render: e => `<span class="mono">${escapeHtml(e.level || '')} @ ${e.x},${e.y},${e.z}</span>` },
+        { label: '', render: e => `<button class="mini" data-undo-id="${e.id}">Undo</button>` }
+      ];
+      header += columns.map(c => `<th>${escapeHtml(c.label)}</th>`).join('');
+      const rows = entries.map(e => {
+        const checkbox = `<td><input type="checkbox" data-action-id="${e.id}" aria-label="Select action ${e.id}" /></td>`;
+        const cells = columns.map(c => `<td>${c.render(e)}</td>`).join('');
+        return `<tr>${checkbox}${cells}</tr>`;
+      }).join('');
+      const toolbar = `<div class="action-row"><button id="btn-undo-selected" type="button" disabled>Undo selected</button><span id="undo-selected-count" class="muted">0 selected</span></div>`;
+      return `${toolbar}<table class="audit-table"><thead><tr>${header}</tr></thead><tbody>${rows}</tbody></table>`;
+    }
+
+    function renderTable(entries, columns, emptyText) {
+      if (!entries || entries.length === 0) return `<p class="muted">${emptyText}</p>`;
+      let header = columns.map(c => `<th>${escapeHtml(c.label)}</th>`).join('');
+      let rows = entries.map(e => {
+        const cells = columns.map(c => `<td>${c.render(e)}</td>`).join('');
+        return `<tr>${cells}</tr>`;
+      }).join('');
+      return `<table class="audit-table"><thead><tr>${header}</tr></thead><tbody>${rows}</tbody></table>`;
+    }
+
+    function formatTs(ts) {
+      return new Date(ts).toLocaleString();
+    }
+
+    function blockPillClass(code) {
+      switch (code) {
+        case 0: return 'warning';
+        case 1: return 'success';
+        case 4:
+        case 5:
+        case 6:
+        case 7: return 'warning';
+        default: return 'neutral';
+      }
+    }
+    function rollbackPillClass(entry) {
+      if (entry.type === 'block') {
+        return blockPillClass(entry.actionType);
+      }
+      if (entry.type === 'container') {
+        return containerPillClass(entry.actionType === 4 ? 1 : entry.actionType === 5 ? 0 : entry.actionType);
+      }
+      return 'neutral';
+    }
+
+    function containerPillClass(code) {
+      switch (code) {
+        case 1: return 'success';
+        case 0: return 'warning';
+        default: return 'neutral';
+      }
+    }
+
+    function blockActionLabel(entry) {
+      if (entry.actionLabel) return escapeHtml(entry.actionLabel);
+      switch (entry.action) {
+        case 0: return 'Break';
+        case 1: return 'Place';
+        case 2: return 'Interact';
+        case 3: return 'Kill';
+        case 4: return 'TNT Ignite';
+        case 5: return 'TNT Explosion';
+        case 6: return 'TNT Redstone';
+        case 7: return 'N/A';
+        default: return 'N/A';
+      }
+    }
+
+    function containerActionLabel(code) {
+      switch (code) {
+        case 1: return 'Add to container';
+        case 0: return 'Remove from container';
+        default: return 'Change container';
+      }
+    }
+    function rollbackActionLabel(entry) {
+      if (entry.type === 'block') {
+        switch (entry.actionType) {
+          case 1: return 'Break';
+          case 2: return 'Place';
+          default: return 'Change';
+        }
+      }
+      if (entry.type === 'container') {
+        switch (entry.actionType) {
+          case 4: return 'Add';
+          case 5: return 'Remove';
+          default: return 'Change';
+        }
+      }
+      return 'Change';
+    }
+
+    function rollbackKey(e) {
+      return [e.level || '', e.x, e.y, e.z, e.ts, e.player || ''].join('|');
+    }
+
+    async function triggerRollback(entries) {
+      if (!entries || entries.length === 0) return;
+      try {
+        const res = await fetch('/api/audit/rollback', {
+          method: 'POST',
+          headers: { ...headers(), 'Content-Type': 'application/json' },
+          body: JSON.stringify({ entries })
+        });
+        if (!res.ok) {
+          showToast('Rollback failed', 'error');
+          return;
+        }
+        const data = await res.json();
+        showToast(data.message || 'Rollback started', 'success');
+        markRollbackDone(entries);
+        loadAudit();
+      } catch (err) {
+        showToast('Rollback failed: ' + err, 'error');
+      }
+    }
+
+    function bindBlockRollbackHandlers() {
+      const panel = panels.blocks;
+      const selectAll = panel.querySelector('#blocks-select-all');
+      const checkboxes = Array.from(panel.querySelectorAll('input[data-rollback-block]'));
+      const buttons = Array.from(panel.querySelectorAll('button[data-rollback-block]'));
+      const bulkBtn = panel.querySelector('#btn-rollback-blocks');
+      const countLabel = panel.querySelector('#rollback-blocks-count');
+
+      const selectedEntries = () => checkboxes.filter(cb => cb.checked).map(cb => ({
+        type: 'block',
+        ...JSON.parse(cb.dataset.rollbackBlock)
+      }));
+
+      const update = () => {
+        const selected = selectedEntries();
+        if (countLabel) countLabel.textContent = `${selected.length} selected`;
+        if (bulkBtn) bulkBtn.disabled = selected.length === 0;
+        if (selectAll) selectAll.checked = selected.length === checkboxes.length && checkboxes.length > 0;
+      };
+
+      checkboxes.forEach(cb => cb.addEventListener('change', update));
+      if (selectAll) selectAll.addEventListener('change', () => {
+        checkboxes.forEach(cb => cb.checked = selectAll.checked);
+        update();
+      });
+      if (bulkBtn) bulkBtn.addEventListener('click', () => triggerRollback(selectedEntries()));
+      buttons.forEach(btn => btn.addEventListener('click', () => {
+        const payload = JSON.parse(btn.dataset.rollbackBlock);
+        triggerRollback([{ type: 'block', ...payload }]);
+      }));
+      update();
+    }
+
+    function bindContainerRollbackHandlers() {
+      const panel = panels.containers;
+      const selectAll = panel.querySelector('#containers-select-all');
+      const checkboxes = Array.from(panel.querySelectorAll('input[data-rollback-container]'));
+      const buttons = Array.from(panel.querySelectorAll('button[data-rollback-container]'));
+      const bulkBtn = panel.querySelector('#btn-rollback-containers');
+      const countLabel = panel.querySelector('#rollback-containers-count');
+
+      const selectedEntries = () => checkboxes.filter(cb => cb.checked).map(cb => ({
+        type: 'container',
+        ...JSON.parse(cb.dataset.rollbackContainer)
+      }));
+
+      const update = () => {
+        const selected = selectedEntries();
+        if (countLabel) countLabel.textContent = `${selected.length} selected`;
+        if (bulkBtn) bulkBtn.disabled = selected.length === 0;
+        if (selectAll) selectAll.checked = selected.length === checkboxes.length && checkboxes.length > 0;
+      };
+
+      checkboxes.forEach(cb => cb.addEventListener('change', update));
+      if (selectAll) selectAll.addEventListener('change', () => {
+        checkboxes.forEach(cb => cb.checked = selectAll.checked);
+        update();
+      });
+      if (bulkBtn) bulkBtn.addEventListener('click', () => triggerRollback(selectedEntries()));
+      buttons.forEach(btn => btn.addEventListener('click', () => {
+        const payload = JSON.parse(btn.dataset.rollbackContainer);
+        triggerRollback([{ type: 'container', ...payload }]);
+      }));
+      update();
+    }
+
+    function bindHistoryRollbackHandlers() {
+      const panel = panels.history;
+      const selectAll = panel.querySelector('#history-select-all');
+      const checkboxes = Array.from(panel.querySelectorAll('input[data-rollback-history]'));
+      const buttons = Array.from(panel.querySelectorAll('button[data-rollback-history]'));
+      const bulkBtn = panel.querySelector('#btn-rollback-history');
+      const countLabel = panel.querySelector('#rollback-history-count');
+
+      const selectedEntries = () => checkboxes.filter(cb => cb.checked).map(cb => ({
+        type: 'history',
+        jobId: Number(cb.dataset.rollbackHistory)
+      }));
+
+      const update = () => {
+        const selected = selectedEntries();
+        if (countLabel) countLabel.textContent = `${selected.length} selected`;
+        if (bulkBtn) bulkBtn.disabled = selected.length === 0;
+        if (selectAll) selectAll.checked = selected.length === checkboxes.length && checkboxes.length > 0;
+      };
+
+      checkboxes.forEach(cb => cb.addEventListener('change', update));
+      if (selectAll) selectAll.addEventListener('change', () => {
+        checkboxes.forEach(cb => cb.checked = selectAll.checked);
+        update();
+      });
+      if (bulkBtn) bulkBtn.addEventListener('click', () => triggerRollback(selectedEntries()));
+      buttons.forEach(btn => btn.addEventListener('click', () => {
+        const jobId = Number(btn.dataset.rollbackHistory);
+        triggerRollback([{ type: 'history', jobId }]);
+      }));
+      update();
+    }
+
+    function markRollbackDone(entries) {
+      entries.forEach(e => {
+        if (e.type === 'block') {
+          const key = rollbackKey(e);
+          panels.blocks.querySelectorAll(`[data-rollback-block*="${key}"]`).forEach(el => {
+            el.disabled = true;
+            el.closest('tr')?.classList.add('muted');
+          });
+        } else if (e.type === 'container') {
+          const key = rollbackKey(e);
+          panels.containers.querySelectorAll(`[data-rollback-container*="${key}"]`).forEach(el => {
+            el.disabled = true;
+            el.closest('tr')?.classList.add('muted');
+          });
+        } else if (e.type === 'history') {
+          panels.history.querySelectorAll(`[data-rollback-history="${e.jobId}"]`).forEach(el => {
+            el.disabled = true;
+            el.closest('tr')?.classList.add('muted');
+          });
+        }
+      });
+    }
+    async function undoActions(ids) {
+      if (!ids || ids.length === 0) return;
+      try {
+        const res = await fetch('/api/audit/undo', {
+          method: 'POST',
+          headers: { ...headers(), 'Content-Type': 'application/json' },
+          body: JSON.stringify({ actionIds: ids })
+        });
+        if (!res.ok) {
+          showToast('Undo failed', 'error');
+          return;
+        }
+        const data = await res.json();
+        showToast(data.message || 'Undo started', 'success');
+        loadAudit();
+      } catch (err) {
+        showToast('Undo failed: ' + err, 'error');
+      }
+    }
+
+    function bindRollbackActionsHandlers() {
+      const panel = panels.rollbackActions;
+      const selectAll = panel.querySelector('#rollback-select-all');
+      const checkboxes = Array.from(panel.querySelectorAll('input[data-action-id]'));
+      const undoButtons = Array.from(panel.querySelectorAll('button[data-undo-id]'));
+      const bulkBtn = panel.querySelector('#btn-undo-selected');
+      const countLabel = panel.querySelector('#undo-selected-count');
+
+      const updateState = () => {
+        const selected = checkboxes.filter(cb => cb.checked).map(cb => Number(cb.dataset.actionId));
+        if (countLabel) countLabel.textContent = `${selected.length} selected`;
+        if (bulkBtn) bulkBtn.disabled = selected.length === 0;
+        if (selectAll) selectAll.checked = selected.length === checkboxes.length && checkboxes.length > 0;
+      };
+
+      checkboxes.forEach(cb => cb.addEventListener('change', updateState));
+      if (selectAll) {
+        selectAll.addEventListener('change', () => {
+          checkboxes.forEach(cb => cb.checked = selectAll.checked);
+          updateState();
+        });
+      }
+      if (bulkBtn) {
+        bulkBtn.addEventListener('click', () => {
+          const ids = checkboxes.filter(cb => cb.checked).map(cb => Number(cb.dataset.actionId));
+          undoActions(ids);
+        });
+      }
+      undoButtons.forEach(btn => btn.addEventListener('click', () => {
+        const id = Number(btn.dataset.undoId);
+        if (!Number.isNaN(id)) undoActions([id]);
+      }));
+
+      updateState();
+    }
+
+    function escapeHtml(text) {
+      const map = {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"};
+      return (text || '').replace(/[&<>"']/g, c => map[c] || c);
+    }
+
+    async function loadAudit() {
+      const limit = Math.min(Math.max(parseInt(limitInput.value || '100'), 10), 500);
+      limitInput.value = limit;
+      saveAutoSettings();
+      saveFilters();
+      const filters = currentFilters();
+      const params = new URLSearchParams();
+      params.set('limit', limit);
+      if (filters.player) params.set('player', filters.player);
+      if (filters.dimension) params.set('dimension', filters.dimension);
+      if (filters.blockAction) params.set('blockAction', filters.blockAction);
+      if (filters.containerAction) params.set('containerAction', filters.containerAction);
+      try {
+        const res = await fetch('/api/audit?' + params.toString(), { headers: headers() });
+        if (!res.ok) {
+          status.textContent = res.status === 401 ? 'Unauthorized: provide a valid token.' : 'Failed to load audit data.';
+          showToast(status.textContent, 'error');
+          return;
+        }
+        const data = await res.json();
+        if (!data.enabled) {
+          status.textContent = 'Audit dashboard is disabled in the config.';
+          stopAutoRefresh();
+          return;
+        }
+        if (data.chatEnabled) panels.chat.innerHTML = renderChat(data.chat || []); else panels.chat.innerHTML = '<p class="muted">Disabled in config.</p>';
+        if (data.blockEnabled) panels.blocks.innerHTML = renderBlocks(data.blocks || []); else panels.blocks.innerHTML = '<p class="muted">Disabled in config.</p>';
+        if (data.containerEnabled) panels.containers.innerHTML = renderContainers(data.containers || []); else panels.containers.innerHTML = '<p class="muted">Disabled in config.</p>';
+        if (data.rollbackActionsEnabled) panels.rollbackActions.innerHTML = renderRollbackActions(data.rollbackActions || []); else panels.rollbackActions.innerHTML = '<p class="muted">Disabled in config.</p>';
+        panels.history.innerHTML = renderHistory(data.history || []);
+        if (data.rollbackActionsEnabled) bindRollbackActionsHandlers();
+        bindBlockRollbackHandlers();
+        bindContainerRollbackHandlers();
+        bindHistoryRollbackHandlers();
+        status.textContent = 'Last updated at ' + new Date().toLocaleTimeString();
+      } catch (err) {
+        status.textContent = 'Error: ' + err;
+        showToast('Error while loading audit data', 'error');
+      }
+    }
+
+    function autoIntervalMs() {
+      const seconds = Math.min(Math.max(parseInt(autoIntervalInput.value || '10'), 3), 300);
+      autoIntervalInput.value = seconds;
+      return seconds * 1000;
+    }
+
+    function startAutoRefresh() {
+      stopAutoRefresh();
+      if (!autoToggle.checked) return;
+      refreshHandle = setInterval(loadAudit, autoIntervalMs());
+    }
+
+    function stopAutoRefresh() {
+      if (refreshHandle) {
+        clearInterval(refreshHandle);
+        refreshHandle = null;
+      }
+    }
+
+    refreshBtn.addEventListener('click', () => {
+      loadAudit();
+    });
+
+    applyFiltersBtn.addEventListener('click', () => {
+      loadAudit();
+    });
+
+    tokenInput.addEventListener('change', () => {
+      const value = (tokenInput.value || '').trim();
+      if (value) localStorage.setItem('glraToken', value); else localStorage.removeItem('glraToken');
+    });
+
+    autoToggle.addEventListener('change', () => {
+      saveAutoSettings();
+      if (autoToggle.checked) {
+        loadAudit();
+        startAutoRefresh();
+      } else {
+        stopAutoRefresh();
+      }
+    });
+
+    autoIntervalInput.addEventListener('change', () => {
+      saveAutoSettings();
+      startAutoRefresh();
+    });
+
+    applySavedToken();
+    loadAutoSettings();
+    applySavedFilters();
+    loadMeta().then(enabled => {
+      if (enabled) {
+        loadDimensions();
+        loadAudit();
+        startAutoRefresh();
+      }
+    });
+  </script>
+</body>
+</html>
+

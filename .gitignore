@@ -27,3 +27,4 @@ run-data
 repo
 .vscode
 test_data
+.vscode/
